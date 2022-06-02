@@ -1,5 +1,5 @@
 ---
-title: "gse37614 batch correction"
+title: "GSE37614 batch correction"
 author: "Clodagh Murray"
 date: "5/19/2022"
 output: html_document
@@ -101,6 +101,7 @@ SDRF$samp_names
 SDRF <- SDRF[match(file_names, SDRF$Array.Data.File),]
 colnames(raw.dat) <- SDRF$samp_names
 
+samples <- SDRF
 ## the below is correct, check it against the head -n 4 *.txt file command above
 head(raw.dat[1:5, 1:5])
 ```
@@ -133,7 +134,9 @@ title <- "GSE37614 Log2 Raw Signals"
 boxplot(log2(exprs(my_set[,ord])), boxwex=0.6, notch=T, main=title, outline=FALSE, las=2, col=gs[ord])
 legend("topleft", stupid_orientation, fill=palette(), bty="n")
 ```
-## Qunatile normalization
+
+
+## Quantile normalization
 
 ```{r}
 quantile_normalisation <- function(df){
@@ -156,10 +159,12 @@ qnorm <- quantile_normalisation(raw.dat)
 
 ```{r}
 par(mar=c(7,4,2,1))
-title <- "GSE37614 Log2 Quantile Norm McDonald"
+title <- "GSE37614 Log2 Quantile Normalization"
 boxplot(log2(qnorm[,ord]), boxwex=0.6, notch=T, main=title, outline=FALSE, las=2, col=gs[ord])
 legend("topleft", stupid_orientation, fill=palette(), bty="n")
 ```
+
+
 ## Update ExpressionSet Object 
 
 ```{r}
@@ -167,7 +172,7 @@ exprs(my_set) <- qnorm
 
 ## check that actually saved
 par(mar=c(7,4,2,1))
-title <- "GSE37614 Log2 Quantile Norm McDonald"
+title <- "GSE37614 Log2 Quantile Normalization"
 boxplot(log2(exprs(my_set[,ord])), boxwex=0.6, notch=T, main=title, outline=FALSE, las=2, col=gs[ord])
 legend("topleft", stupid_orientation, fill=palette(), bty="n")
 ```
@@ -190,9 +195,11 @@ hist(log2(medians + 1), 150, col = "cornsilk1", freq = FALSE,
              main = "Histogram of the median intensities", 
              border = "antiquewhite4", xlab = "Median intensities")
 ```
-## Remove Multimap probes
 
-```{r}
+
+## Remove Multimapping probes
+
+```{r, message = F}
 probes <- rownames(my_set)
 
 library(illuminaHumanv4.db)
@@ -220,7 +227,8 @@ remove_id <- (probes %in% ann_flt$PROBEID)
 
 table(remove_id)
 ```
-# Too many genes
+### Too many genes
+*manual filtering*
 
 ```{r}
 annotations <- read.table("/home/clodagh/MASTERS PROJECT/GSE37614/A-GEOD-10558.adf.txt", header=T, sep="\t")
@@ -278,10 +286,12 @@ hist(log2(qnorm + 1), 150, col = "cornsilk1", freq = FALSE,
              main = "Histogram of the median intensities", 
              border = "antiquewhite4", xlab = "Median intensities")
 ```
+
+
 # Exploratory Data Analysis
 
-## PCA Cancer Subtypes
-2 groups - largely driven by batch
+### PCA Cancer Subtypes
+*2 groups - largely driven by batch*
 ```{r}
 
 PCA <- prcomp(t(log2(qnorm)), scale = TRUE)
@@ -303,7 +313,8 @@ ggscatter(dataGG, x="PC1", y="PC2",
                   theme(legend.position = "right") + 
                   theme(plot.title = element_text(hjust = 0.5, face = "bold"))
 ```
-## PCA Batch Effects
+
+### PCA Batch Effects
 ```{r}
 dataGG <- data.frame(PC1 = PCA$x[,1], PC2 = PCA$x[,2],
                     Batch = my_set$Characteristics..batch.)
@@ -320,6 +331,8 @@ ggscatter(dataGG, x="PC1", y="PC2",
                   theme(legend.position = "right") + 
                   theme(plot.title = element_text(hjust = 0.5, face = "bold"))
 ```
+
+
 ## Pearsons Correlation btween PCs and batch and cancer
 
 ```{r}
@@ -343,22 +356,26 @@ PCAtools::eigencorplot(pca, components = PCAtools::getComponents(pca, 1:10),
     signifSymbols = c('****', '***', '**', '*', ''),
     signifCutpoints = c(0, 0.0001, 0.001, 0.01, 0.05, 1))
 ```
+
+
 ## Batch Correction
 ```{r}
-groups <-  c("ER", "Her2", "TNBC")
+groups <- as.factor(groups)
+gps <- c("ER", "HER", "TNBC")
 design <- model.matrix(~0 + groups)
-colnames(design) <- c("ER", "Her2", "TNBC")
-rm_batch <- limma::removeBatchEffect(log2(qnorm + 1), batch = my_set@phenoData@data$Characteristics..batch., design=design)
-aw <- arrayWeights(rm_batch, design)
-barplot(aw)
+colnames(design) <- gps
 
-fit <- limma::lmFit(rm_batch, design, weight =aw)
+rm_batch <- limma::removeBatchEffect(log2(qnorm + 1), batch = my_set@phenoData@data$Characteristics..batch., design=design)
+fit <- limma::lmFit(rm_batch, design)
+
+write.table(rm_batch, file = '/home/clodagh/MASTERS PROJECT/GSE37614/GSE37614_counts_matrix.txt', sep ='\t', col.names = T, row.names = T)
 ```
 
 
+### Contrast Matrix 
 ```{r}
 # Set up contrasts of interest
-cts <- paste(groups, c(tail(groups, -1), head(groups, 1)), sep="-")
+cts <- paste(gps, c(tail(gps, -1), head(gps, 1)), sep="-")
 cont.matrix <- limma::makeContrasts(contrasts=cts, levels=design)
 
 fit2 <- limma::contrasts.fit(fit, cont.matrix)
@@ -389,7 +406,8 @@ ggscatter(dataGG, x="PC1", y="PC2",
                   theme(legend.position = "right") + 
                   theme(plot.title = element_text(hjust = 0.5, face = "bold"))
 ```
-## PCA Batch Effect (Correcter)
+
+## PCA Batch Effect (Corrected)
 
 ```{r}
 dataGG <- data.frame(PC1 = PCA$x[,1], PC2 = PCA$x[,2],
@@ -408,35 +426,70 @@ ggscatter(dataGG, x="PC1", y="PC2",
                   theme(plot.title = element_text(hjust = 0.5, face = "bold"))
 ```
 
+
+
+### coef = 1 (ER-Her2)
 ```{r}
 #Create the top table for the comparison (coef) we want
-# coef = 1 (ER-Her2)
 top1 <- topTable(fit2, coef=1, adjust="fdr", sort.by="B", number = Inf)
 
 #Top Table of significant genes only
-up_reg1 <- subset(top1, abs(logFC) > 1 & adj.P.Val < 0.05)
+up_reg1 <- subset(top1, abs(logFC) >= 1 & adj.P.Val <= 0.05)
 nrow(up_reg1)
+```
+## Volcano plot of ER-HER2
+```{r}
+plot(top1$logFC, -log10(top1$adj.P.Val), pch="*", xlab="Log2 Fold Change", ylab="-10log (adjusted p-value)", main = "ER vs. Her2 DEGs")
+abline(h=-log10(0.05), v=c(-1, 1), col="red", lty=2)
+points(up_reg1$logFC, -log10(up_reg1$adj.P.Val), col="red", pch="*")
+```
+```{r}
+library(gplots)
+sig_HER_ER <- rm_batch[rownames(rm_batch) %in% rownames(up_reg1),]
+heatmap.2(sig_HER_ER, trace="none", scale="row", col="redgreen", cexRow=0.2, cexCol=0.7, main = "HER vs ER DEGS")
+```
 
 
-# coef = 2 (Her2-TNBC)
+```{r}
+write.table(rm_batch, file = '/home/clodagh/MASTERS PROJECT/GSE37614/GSE37614_counts_matrix.txt', sep ='\t', col.names = T, row.names = T)
+```
+
+### coef = 2 (Her2-TNBC)
+```{r}
 top2 <- topTable(fit2, coef=2, adjust="fdr", sort.by="B", number = Inf)
 
 #Top Table of significant genes only
-up_reg2 <- subset(top2, abs(logFC) > 1 & P.Value < 0.05)
+up_reg2 <- subset(top2, abs(logFC) > 1 & adj.P.Val < 0.05)
 nrow(up_reg2)
+```
+## Volcano plot of HER2 vs TNBC
+```{r}
+plot(top2$logFC, -log10(top2$adj.P.Val), pch="*", xlab="Log2 Fold Change", ylab="-10log (adjusted p-value)", main = "Her2 vs TNBC DEGs")
+abline(h=-log10(0.05), v=c(-1, 1), col="red", lty=2)
+points(up_reg2$logFC, -log10(up_reg2$adj.P.Val), col="red", pch="*")
+```
 
-# coef = 3 (TNBC-ER)
+```{r}
+library(gplots)
+sig_HER_TNBC <- rm_batch[rownames(rm_batch) %in% rownames(up_reg2),]
+heatmap.2(sig_HER_TNBC, trace="none", scale="row", col="redgreen", cexRow=0.2, cexCol=0.7, main = "HER vs TNBC DEGS")
+```
+
+
+### coef = 3 (TNBC-ER)
+```{r}
 top3 <- topTable(fit2, coef=3, adjust="fdr", sort.by="B", number = Inf)
 
 #Top Table of significant genes only
-up_reg3 <- subset(top3, abs(logFC) > 1 & P.Value < 0.05)
+up_reg3 <- subset(top3, abs(logFC) > 1 & adj.P.Val < 0.05)
 nrow(up_reg3)
 ```
 
 ## Heatmap 
 
 ```{r}
-up_reg_names <- rownames(up_reg1)
+up_reg_names <- c(rownames(up_reg1), rownames(up_reg2))
+length(up_reg_names)
 e <- rm_batch
 sig_exprs <- e[rownames(e) %in% up_reg_names,]
 
@@ -461,26 +514,21 @@ pheatmap::pheatmap(sig_exprs, cluster_cols = T, cluster_rows = T, show_rownames 
                    col = hcl.colors(100, "Purple-Green",rev=F),
                    cutree_cols = 4)
 ```
-
+## Top Table
 
 ```{r}
-#Create an excel-readable table with the specified columns for sig gene only
-tT <- subset(top, select=c("logFC","adj.P.Val","P.Value","t"))
-write.table(tT, "DEGs_ER-Her2.csv", row.names=F, sep="\t")
-# Expression levels for ALL genes
+topT <- topTable(fit2, number = Inf)
+length(which(topT$adj.P.Val < 0.05))
 
-top_all <- topTable(fit2, adjust="fdr", sort.by="B", number=Inf)
-
-
-hist(top_all$adj.P.Val, col = "grey", border = "white", xlab = "P-adj",
-     ylab = "Number of genes", main = "P-adj value distribution")
+up_reg_epi <- subset(topT, abs(topT[,1:3]) > 0.5 & adj.P.Val < 0.05)
 ```
 
-
 ```{r}
-#Extract the expression values for the DEGs
-sig_exprs <- rm_batch[rownames(rm_batch) %in% rownames(tT),]
-dim(sig_exprs)
+# logFC > 0.5 & adj p-value < 0.05
+write.table(up_reg_epi, "GSE37614_DEGs_overall.csv", row.names=T, sep="\t")
+
+DT::datatable(up_reg_epi, rownames = T, select=c("ER.Her2", "Her2.TNBC", "TNBC.ER","adj.P.Val","P.Value","t"), options = list(scrollX = TRUE, pageLength = 7, scroller = TRUE))
+
 ```
 
 ```{r}
@@ -489,40 +537,4 @@ dT <- decideTests(fit2, adjust.method="fdr", p.value=0.05)
 vennDiagram(dT, circle.col=palette())
 ```
 
-```{r}
-# create Q-Q plot for t-statistic
-t.good <- which(!is.na(fit2$F)) # filter out bad probes
-qqt(fit2$t[t.good], fit2$df.total[t.good], main="Moderated t statistic")
-```
-
-
-## Dataframe of all DEGs
-
-```{r}
-top <- topTable(fit2, adjust="fdr", sort.by="B", number = Inf)
-
-#log fold change for any comparison >1
-top_sig <- subset(top, abs(top[,c(1,2,3)]) >= 1 & adj.P.Val <= 0.05)
-
-write.table(top_sig, "DEGs_overall.csv", row.names=T, sep="\t")
-
-DT::datatable(top_sig, rownames = T, select=c("ER.Her2", "Her2.TNBC", "TNBC.ER","adj.P.Val","P.Value","t"), options = list(scrollX = TRUE, pageLength = 19, scroller = TRUE))
-```
-
-## Volcano plot of ER-HER2
-```{r}
-plot(top1$logFC, -log10(top1$adj.P.Val), pch="*", xlab="Log2 Fold Change", ylab="-10log (adjusted p-value)", main = "ER vs. Her2 DEGs")
-abline(h=-log10(0.05), v=c(-1, 1), col="red", lty=2)
-points(up_reg1$logFC, -log10(up_reg1$adj.P.Val), col="red", pch="*")
-```
-```{r}
-library(gplots)
-sig_HER_ER <- rm_batch[rownames(rm_batch) %in% rownames(up_reg1),]
-heatmap.2(sig_HER_ER, trace="none", scale="row", col="redgreen", cexRow=0.2, cexCol=0.7, main = "HER vs ER DEGS")
-```
-
-
-```{r}
-write.table(rm_batch, file = '/home/clodagh/MASTERS PROJECT/GSE37614/GSE37614_counts_matrix.txt', sep ='\t', col.names = T, row.names = T)
-```
 
