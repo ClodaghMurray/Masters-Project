@@ -524,7 +524,7 @@ up_reg_epi <- subset(topT, abs(topT[,1:3]) > 0.5 & adj.P.Val < 0.05)
 ```
 
 ```{r}
-# logFC > 0.5 & adj p-value < 0.05
+# logFC >= 0.5 & adj p-value <= 0.05
 write.table(up_reg_epi, "GSE37614_DEGs_overall.csv", row.names=T, sep="\t")
 
 DT::datatable(up_reg_epi, rownames = T, select=c("ER.Her2", "Her2.TNBC", "TNBC.ER","adj.P.Val","P.Value","t"), options = list(scrollX = TRUE, pageLength = 7, scroller = TRUE))
