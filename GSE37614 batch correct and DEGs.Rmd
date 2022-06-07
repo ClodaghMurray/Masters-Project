@@ -19,46 +19,6 @@ library(limma)
 ```
 
 ## Raw Data Staging
-```{r}
-SDRF <- read.delim("/home/clodagh/MASTERS PROJECT/GSE37614/E-GEOD-37614.sdrf.txt")
-rownames(SDRF) <- SDRF$Array.Data.File
-DT::datatable(SDRF, options = list(scrollX = TRUE, pageLength = 19, scroller = TRUE))
-```
-
-## Signal Files
-```{r}
-#function to stick files together in a dataframe
-gen_raw <- function(path, pattern){
-  files = list.files(path, pattern, full.names=T, recursive=T, include.dirs=T)
-  mat = as.data.frame(do.call(cbind, lapply(files, function(x) data.table::fread(x, stringsAsFactors=FALSE))))
-  ID_REF = mat[,1]
-  mat = as.data.frame(mat[,!grepl("ID_REF", colnames(mat))])
-  rownames(mat) = ID_REF
-  return(mat)
-}
-
-
-raw.dat <- gen_raw("/home/clodagh/MASTERS PROJECT/GSE37614/raw/", "\\.txt$")
-dim(raw.dat)
-head(raw.dat)
-```
-
-```{r}
-# append correct sample names to each column
-file_names <- list.files("/home/clodagh/MASTERS PROJECT/GSE37614/raw/", "\\.txt$", full.names=T, recursive=T, include.dirs=T)
-file_names <- sub(".*/", "", file_names)
-head(file_names)
-```
-
-```{r}
-sample_names <- sub("\\_.*", "", file_names)
-head(sample_names)
-```
-
-```{r}
-# There are more columns in raw.dat (23) than there are sample names in the annotation file (19).
-length(sample_names) == ncol(raw.dat) #FALSE
-```
 ### 4 samples were analysed in both batches 1 and 2, creating 4 extra samples in the raw data - update metadata to match raw data 
 
 ```{r}
@@ -91,22 +51,22 @@ length(sample_names) == ncol(raw.dat)
 ## Append IDs to matrix
 
 ```{r}
-# we need to append batch ID's to the samplenames - sorry but has to happen for unique colnames. 
+#  append batch ID's to the sample names for unique colnames. 
 SDRF$samp_names <- paste(SDRF$Assay.Name, SDRF$Characteristics..batch., sep=":")
 SDRF$samp_names
 
 ```
 ```{r}
-# below is most important part to make sure columns match file contents
+# make sure columns match file contents
 SDRF <- SDRF[match(file_names, SDRF$Array.Data.File),]
 colnames(raw.dat) <- SDRF$samp_names
-
 samples <- SDRF
-## the below is correct, check it against the head -n 4 *.txt file command above
+
+## the below is correct 
 head(raw.dat[1:5, 1:5])
 ```
 
-## Expression Set 
+## Make Expression Set manually
 
 ```{r}
 SDRF <- Biobase::AnnotatedDataFrame(SDRF)
@@ -117,13 +77,14 @@ my_set
 
 ## Raw Data Boxplot
 ```{r}
+SDRF@data$FactorValue..PATIENT.ID.
 SDRF@data$Characteristics..class.[23] <- "Her2+"
-sml <- as.character(as.numeric(as.factor(SDRF@data$Characteristics..class.)))
+sml <- as.character(as.numeric(as.factor(SDRF@data$Characteristics..class.))) 
 gs <- factor(sml)
-groups <- SDRF@data$Characteristics..class. # HER2+ER+ sample? 
-stupid_orientation <- unique(groups)
-stupid_orientation <- c(stupid_orientation[2], stupid_orientation[3], stupid_orientation[1])
-levels(gs) <- stupid_orientation
+groups <- SDRF@data$Characteristics..class. 
+orientation <- unique(groups)
+orientation <- c(orientation[2], orientation[3], orientation[1])
+levels(gs) <- orientation
 my_set@phenoData$group <- gs
 ord <- order(gs)
 
@@ -132,7 +93,7 @@ palette <- palette(c("#1B9E77", "#7570B3", "pink"))
 par(mar=c(7,4,2,1))
 title <- "GSE37614 Log2 Raw Signals"
 boxplot(log2(exprs(my_set[,ord])), boxwex=0.6, notch=T, main=title, outline=FALSE, las=2, col=gs[ord])
-legend("topleft", stupid_orientation, fill=palette(), bty="n")
+legend("topleft", orientation, fill=palette(), bty="n")
 ```
 
 
@@ -155,26 +116,19 @@ df_final <- apply(df_rank, 2, index_to_mean, my_mean=df_mean)
 qnorm <- quantile_normalisation(raw.dat)
 ```
 
-## Boxplot of Qnorm
-
-```{r}
-par(mar=c(7,4,2,1))
-title <- "GSE37614 Log2 Quantile Normalization"
-boxplot(log2(qnorm[,ord]), boxwex=0.6, notch=T, main=title, outline=FALSE, las=2, col=gs[ord])
-legend("topleft", stupid_orientation, fill=palette(), bty="n")
-```
-
 
 ## Update ExpressionSet Object 
+
+### Boxplot of Qnorm
 
 ```{r}
 exprs(my_set) <- qnorm
 
-## check that actually saved
+## boxplot
 par(mar=c(7,4,2,1))
 title <- "GSE37614 Log2 Quantile Normalization"
 boxplot(log2(exprs(my_set[,ord])), boxwex=0.6, notch=T, main=title, outline=FALSE, las=2, col=gs[ord])
-legend("topleft", stupid_orientation, fill=palette(), bty="n")
+legend("topleft", orientation, fill=palette(), bty="n")
 ```
 ## Expression Distribution
 
@@ -182,7 +136,7 @@ legend("topleft", stupid_orientation, fill=palette(), bty="n")
 ex <- exprs(my_set)
 par(mar=c(4,4,2,1))
 title <- paste ("Normalized Expression Density", sep ="")
-limma::plotDensities(ex, group=gs, main=title, legend ="topright")
+limma::plotDensities(log2(ex), group=gs, main=title, legend ="topright")
 ```
 
 ## Probe Filtering
@@ -221,7 +175,7 @@ annotation <- subset(annotation, !is.na(SYMBOL))
 ann_grouped <- group_by(annotation, PROBEID)
 ann_sum <- dplyr::summarize(ann_grouped, no_of_matches = n_distinct(SYMBOL))
 
-ann_flt <- filter(ann_sum, no_of_matches > 1)
+ann_flt <- dplyr::filter(ann_sum, no_of_matches > 1)
 
 remove_id <- (probes %in% ann_flt$PROBEID)
 
@@ -254,7 +208,9 @@ master_sub <- master_sub[!(is.na(master_sub$hgnc_symbol) | master_sub$hgnc_symbo
 # remove multi mapping probes
 master_sub <- master_sub %>% distinct(hgnc_symbol, .keep_all = T)
 dim(master_sub)
+
 ```
+
 ```{r}
 qnorm <- subset(qnorm, rownames(qnorm) %in% master_sub$Reporter.Name)
 dim(qnorm)
@@ -263,6 +219,8 @@ dim(qnorm)
 ```{r}
 master_sub <- master_sub[match(rownames(qnorm), master_sub$Reporter.Name),]
 rownames(qnorm) <- master_sub$hgnc_symbol
+
+# qnorm now annotated with gene symbol instead of reporter name
 head(qnorm[1:3,1:3])
 ```
 
@@ -280,11 +238,13 @@ qnorm <- as.data.frame(qnorm)
 qnorm$medians <- medians
 
 qnorm <- subset(qnorm, qnorm$medians > 7.9)
-qnorm <- as.matrix(qnorm[,1:(ncol(qnorm)-1)])
+qnorm <- as.matrix(qnorm[,1:(ncol(qnorm)-1)]) # get rid of last col (medians) 
 
+# plot again
 hist(log2(qnorm + 1), 150, col = "cornsilk1", freq = FALSE, 
              main = "Histogram of the median intensities", 
              border = "antiquewhite4", xlab = "Median intensities")
+dim(qnorm)
 ```
 
 
@@ -292,6 +252,7 @@ hist(log2(qnorm + 1), 150, col = "cornsilk1", freq = FALSE,
 
 ### PCA Cancer Subtypes
 *2 groups - largely driven by batch*
+
 ```{r}
 
 PCA <- prcomp(t(log2(qnorm)), scale = TRUE)
@@ -308,7 +269,7 @@ ggscatter(dataGG, x="PC1", y="PC2",
                   subtitle = "Cancer Subtypes",
                   xlab = paste0("PC1, VarExp: ", percentVar[1], "%"),
                   ylab = paste0("PC2, VarExp: ", percentVar[2], "%"),
-                  ellipse = FALSE, star.plot = FALSE, # HER2+ER+ sample n=1 - star, ellipse breaks
+                  ellipse = FALSE, star.plot = FALSE,
                   ggtheme = theme_bw()) + 
                   theme(legend.position = "right") + 
                   theme(plot.title = element_text(hjust = 0.5, face = "bold"))
@@ -358,18 +319,20 @@ PCAtools::eigencorplot(pca, components = PCAtools::getComponents(pca, 1:10),
 ```
 
 
-## Batch Correction
+## Limma Batch Correction
 ```{r}
 groups <- as.factor(groups)
 gps <- c("ER", "HER", "TNBC")
 design <- model.matrix(~0 + groups)
 colnames(design) <- gps
-
+meta$Batch
 rm_batch <- limma::removeBatchEffect(log2(qnorm + 1), batch = my_set@phenoData@data$Characteristics..batch., design=design)
+aw <- arrayWeights(log2(rm_batch), design)
 fit <- limma::lmFit(rm_batch, design)
 
 write.table(rm_batch, file = '/home/clodagh/MASTERS PROJECT/GSE37614/GSE37614_counts_matrix.txt', sep ='\t', col.names = T, row.names = T)
 ```
+
 
 
 ### Contrast Matrix 
@@ -379,7 +342,7 @@ cts <- paste(gps, c(tail(gps, -1), head(gps, 1)), sep="-")
 cont.matrix <- limma::makeContrasts(contrasts=cts, levels=design)
 
 fit2 <- limma::contrasts.fit(fit, cont.matrix)
-fit2 <- limma::eBayes(fit2, 0.01)
+fit2 <- limma::eBayes(fit2,0.01)
 res <- limma::decideTests(fit2)
 summary(res)
 ```
@@ -426,15 +389,16 @@ ggscatter(dataGG, x="PC1", y="PC2",
                   theme(plot.title = element_text(hjust = 0.5, face = "bold"))
 ```
 
-
+# Differentially Expressed Genes
 
 ### coef = 1 (ER-Her2)
 ```{r}
+
 #Create the top table for the comparison (coef) we want
 top1 <- topTable(fit2, coef=1, adjust="fdr", sort.by="B", number = Inf)
 
 #Top Table of significant genes only
-up_reg1 <- subset(top1, abs(logFC) >= 1 & adj.P.Val <= 0.05)
+up_reg1 <- top1[top1$adj.P.Val <= 0.05 & abs(top1$logFC) >= 1, ];
 nrow(up_reg1)
 ```
 ## Volcano plot of ER-HER2
@@ -450,16 +414,12 @@ heatmap.2(sig_HER_ER, trace="none", scale="row", col="redgreen", cexRow=0.2, cex
 ```
 
 
-```{r}
-write.table(rm_batch, file = '/home/clodagh/MASTERS PROJECT/GSE37614/GSE37614_counts_matrix.txt', sep ='\t', col.names = T, row.names = T)
-```
-
 ### coef = 2 (Her2-TNBC)
 ```{r}
 top2 <- topTable(fit2, coef=2, adjust="fdr", sort.by="B", number = Inf)
 
 #Top Table of significant genes only
-up_reg2 <- subset(top2, abs(logFC) > 1 & adj.P.Val < 0.05)
+up_reg2 <- top2[top2$adj.P.Val <= 0.05 & abs(top2$logFC) >= 1, ];
 nrow(up_reg2)
 ```
 ## Volcano plot of HER2 vs TNBC
@@ -481,7 +441,7 @@ heatmap.2(sig_HER_TNBC, trace="none", scale="row", col="redgreen", cexRow=0.2, c
 top3 <- topTable(fit2, coef=3, adjust="fdr", sort.by="B", number = Inf)
 
 #Top Table of significant genes only
-up_reg3 <- subset(top3, abs(logFC) > 1 & adj.P.Val < 0.05)
+up_reg3 <-  top3[top3$adj.P.Val <= 0.05, ];
 nrow(up_reg3)
 ```
 
@@ -492,14 +452,13 @@ up_reg_names <- c(rownames(up_reg1), rownames(up_reg2))
 length(up_reg_names)
 e <- rm_batch
 sig_exprs <- e[rownames(e) %in% up_reg_names,]
-
 sig_exprs <- t(sig_exprs)
 sig_exprs <- scale(sig_exprs, center=T, scale = T)
 sig_exprs <- t(sig_exprs)
 
 annot_col <- data.frame(row.names = colnames(rm_batch), Group = factor(my_set$group))
 
-cols <- c("red", "blue", "green")
+cols <- c("pink", "blue", "yellow")
 names(cols) <- c("ER+", "Her2+", "TNBC")
 annot_colors <- list(Group = cols)
 
@@ -514,21 +473,16 @@ pheatmap::pheatmap(sig_exprs, cluster_cols = T, cluster_rows = T, show_rownames 
                    col = hcl.colors(100, "Purple-Green",rev=F),
                    cutree_cols = 4)
 ```
+
+
+
 ## Top Table
 
 ```{r}
-topT <- topTable(fit2, number = Inf)
-length(which(topT$adj.P.Val < 0.05))
+# logFC >= 1 & adjusted p-value <= 0.05
+write.table(sig_exprs, "GSE37614_DEGs_overall.csv", row.names=T, sep="\t")
 
-up_reg_epi <- subset(topT, abs(topT[,1:3]) > 0.5 & adj.P.Val < 0.05)
-```
-
-```{r}
-# logFC >= 0.5 & adj p-value <= 0.05
-write.table(up_reg_epi, "GSE37614_DEGs_overall.csv", row.names=T, sep="\t")
-
-DT::datatable(up_reg_epi, rownames = T, select=c("ER.Her2", "Her2.TNBC", "TNBC.ER","adj.P.Val","P.Value","t"), options = list(scrollX = TRUE, pageLength = 7, scroller = TRUE))
-
+DT::datatable(sig_exprs, rownames = T, select=c("ER.Her2", "Her2.TNBC", "TNBC.ER","adj.P.Val","P.Value","t"), options = list(scrollX = TRUE, pageLength = 7, scroller = TRUE))
 ```
 
 ```{r}
@@ -536,5 +490,148 @@ DT::datatable(up_reg_epi, rownames = T, select=c("ER.Her2", "Her2.TNBC", "TNBC.E
 dT <- decideTests(fit2, adjust.method="fdr", p.value=0.05)
 vennDiagram(dT, circle.col=palette())
 ```
+## Plot of top DEGS between both HER2 and ER+ and HER2 and TNBC
+
+### (ER-Her2)
+```{r}
+#Top Table of significant genes only
+up_reg_fc2 <- top1[top1$adj.P.Val <= 0.05 & abs(top1$logFC) >= 2, ];
+nrow(up_reg_fc2)
+```
+### (Her2-TNBC)
+```{r}
+#Top Table of significant genes only
+up_reg_fc2_ <- top2[top1$adj.P.Val <= 0.05 & abs(top2$logFC) >= 2, ];
+nrow(up_reg_fc2_)
+```
+
+```{r}
+up_reg_names <- c(rownames(up_reg_fc2), rownames(up_reg_fc2_))
+length(up_reg_names)
+both_sig_exprs <- e[rownames(e) %in% up_reg_names,]
+dim(both_sig_exprs)
+```
+
+```{r}
+library(RColorBrewer)
+library(pheatmap)
+### Set a color palette
+heat.colors <- brewer.pal(100, "YlOrRd")
+
+### Run pheatmap
+pheatmap(sig_exprs_, color = heat.colors, cluster_rows = F, show_rownames=T,
+annotation= annot_col, border_color=NA, fontsize = 10, scale="row",
+     fontsize_row = 10, height=20, main = "Top 40 DEGs")
+```
+
+
+# GSEA
+```{r}
+library(org.Hs.eg.db)
+library(DOSE) #Disease ontology; description of gene products with disease perspectvies
+library(pathview)
+library(clusterProfiler)
+library(AnnotationHub)
+library(ensembldb)
+library(tidyverse)
+library(fgsea)
+library(stringr) #used to wrap text on dotplot
+library(ggplot2)
+```
+
+
+```{r}
+#coeff =1
+upreg1 <- up_reg1[up_reg1$logFC > 1 & up_reg1$adj.P.Val < 0.05, ]
+downreg1 <- up_reg1[up_reg1$logFC < 1 & up_reg1$adj.P.Val < 0.05, ]
+
+#coeff = 2
+upreg2 <- up_reg2[up_reg2$logFC > 1 & up_reg2$adj.P.Val < 0.05, ]
+downreg2 <- up_reg2[up_reg2$logFC < 1 & up_reg2$adj.P.Val < 0.05, ]
+
+
+up_reg <- c(rownames(upreg1), rownames(upreg2))
+down_reg <- c(rownames(downreg1), rownames(downreg2))
+```
+
+
+```{r}
+hs <- org.Hs.eg.db
+
+all_genes_entrez <- AnnotationDbi::select(hs, 
+       keys = rownames(rm_batch),
+       columns = c("ENTREZID", "SYMBOL"),
+       keytype = "SYMBOL")
+
+DEG_entrez <- AnnotationDbi::select(hs, 
+       keys = rownames(sig_exprs),
+       columns = c("ENTREZID", "SYMBOL"),
+       keytype = "SYMBOL")
+
+up_reg_entrez <- AnnotationDbi::select(hs, 
+       keys = up_reg,
+       columns = c("ENTREZID", "SYMBOL"),
+       keytype = "SYMBOL")
+
+down_reg_entrez <-  AnnotationDbi::select(hs, 
+       keys = down_reg,
+       columns = c("ENTREZID", "SYMBOL"),
+       keytype = "SYMBOL")
+
+```
+
+# DEGs overall GSEA (BP)
+```{r}
+ego <- enrichGO(gene = DEG_entrez$ENTREZID, 
+                keyType = "ENTREZID",
+                OrgDb = org.Hs.eg.db, 
+                ont = "BP", #Biological Processes GO term, also done for CC and MF
+                pAdjustMethod = "BH", 
+                qvalueCutoff = 0.05, 
+                readable = TRUE)
+
+
+cluster_BP_summary <- data.frame(ego)
+View(cluster_BP_summary)
+pdf(file='/home/clodagh/MASTERS PROJECT/GSE37614/DEGs_BP.pdf')
+dotplot(ego, showCategory=10) + ggtitle("DEGs GO (Biological Process)")  +
+  theme_classic()
+dev.off()
+```
+
+# DEGs overall GSEA (CC)
+```{r}
+ego <- enrichGO(gene = DEG_entrez$ENTREZID, 
+                keyType = "ENTREZID",
+                OrgDb = org.Hs.eg.db, 
+                ont = "CC", #Biological Processes GO term, also done for CC and MF
+                pAdjustMethod = "BH", 
+                qvalueCutoff = 0.05, 
+                readable = TRUE)
+cluster_CC_summary <- data.frame(ego)
+View(cluster_CC_summary)
+#can see a llot of terms associated with chromosomal rearrangement
+pdf(file='/home/clodagh/MASTERS PROJECT/GSE37614/DEGS_CC.pdf')
+dotplot(ego, showCategory=10) + ggtitle("DEGS GO (Cellular Component)")  +
+  theme_classic()
+dev.off()
+```
+# DEGs overall GSEA (MF)
+```{r}
+ego <- enrichGO(gene = DEG_entrez$ENTREZID, 
+                keyType = "ENTREZID",
+                OrgDb = org.Hs.eg.db, 
+                ont = "MF", #Biological Processes GO term, also done for CC and MF
+                pAdjustMethod = "BH", 
+                qvalueCutoff = 0.05, 
+                readable = TRUE)
+cluster_MF_summary <- data.frame(ego)
+View(cluster_MF_summary)
+pdf(file='/home/clodagh/MASTERS PROJECT/GSE37614/DEGS_MF.pdf')
+dotplot(ego, showCategory=10) + ggtitle("DEGs GO (Molecular Function)")  +
+  theme_classic()
+dev.off()
+```
+
 
 
