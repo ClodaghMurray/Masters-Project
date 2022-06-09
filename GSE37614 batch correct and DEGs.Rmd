@@ -330,6 +330,8 @@ rm_batch <- limma::removeBatchEffect(log2(qnorm + 1), batch = my_set@phenoData@d
 aw <- arrayWeights(log2(rm_batch), design)
 fit <- limma::lmFit(rm_batch, design)
 
+#merge(rm_batch, all_genes_entrez, by.x = "row.names", by.y="SYMBOL")
+
 write.table(rm_batch, file = '/home/clodagh/MASTERS PROJECT/GSE37614/GSE37614_counts_matrix.txt', sep ='\t', col.names = T, row.names = T)
 ```
 
@@ -670,8 +672,6 @@ annotation= annot_col, border_color=NA, fontsize = 10, scale="row",
 
 
 
-
-
 # GSEA
 ```{r}
 library(org.Hs.eg.db)
@@ -702,8 +702,8 @@ down_reg <- c(rownames(downreg1), rownames(downreg2))
 ```
 
 
+# get entrez ID from gene symbol 
 ```{r}
-hs <- org.Hs.eg.db
 
 all_genes_entrez <- AnnotationDbi::select(hs, 
        keys = rownames(rm_batch),
@@ -711,7 +711,7 @@ all_genes_entrez <- AnnotationDbi::select(hs,
        keytype = "SYMBOL")
 
 DEG_entrez <- AnnotationDbi::select(hs, 
-       keys = rownames(sig_exprs),
+       keys = rownames(top_sigg),
        columns = c("ENTREZID", "SYMBOL"),
        keytype = "SYMBOL")
 
@@ -726,7 +726,6 @@ down_reg_entrez <-  AnnotationDbi::select(hs,
        keytype = "SYMBOL")
 
 ```
-
 
 # DEGs overall GSEA (BP)
 
@@ -765,6 +764,7 @@ dotplot(ego, showCategory=10) + ggtitle("DEGS GO (Cellular Component)")  +
   theme_classic()
 dev.off()
 ```
+
 # DEGs overall GSEA (MF)
 ```{r}
 ego <- enrichGO(gene = DEG_entrez$ENTREZID, 
