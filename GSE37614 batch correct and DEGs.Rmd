@@ -8,6 +8,7 @@ output: html_document
 
 ### Libraries
 ```{r, message =F}
+library(oligo)
 library(Biobase)
 library(ggpubr)
 library(data.table)
@@ -164,18 +165,18 @@ library(illuminaHumanv4.db)
 ```{r}
 annotation <- AnnotationDbi::select(illuminaHumanv4.db,
                                     keys = probes,
-                                    columns = c("SYMBOL", "GENENAME"),
+                                    columns = c("SYMBOL", "GENENAME", "ENTREZID"),
                                     keytype = "PROBEID")
 ```
 
 ```{r}
 ## 'select()' returned 1:many mapping between keys and columns
-annotation <- subset(annotation, !is.na(SYMBOL))
+annotation <- subset(annotation, !is.na(ENTREZID))
 
 ## resolve multi maps. 
 
 ann_grouped <- group_by(annotation, PROBEID)
-ann_sum <- dplyr::summarize(ann_grouped, no_of_matches = n_distinct(SYMBOL))
+ann_sum <- dplyr::summarize(ann_grouped, no_of_matches = n_distinct(ENTREZID))
 
 ann_flt <- dplyr::filter(ann_sum, no_of_matches > 1)
 
@@ -250,6 +251,42 @@ dim(qnorm)
 
 
 # Exploratory Data Analysis
+## Sample heatmap
+
+```{r}
+phenotype_names <- my_set$group
+
+batch <- my_set$Characteristics..batch.
+                                  
+annotation_for_heatmap <- 
+  data.frame(subtype = phenotype_names,  Batch= batch)
+
+row.names(annotation_for_heatmap) <- row.names(pData(my_set))
+```
+
+```{r}
+dists <- as.matrix(dist(t(qnorm), method = "manhattan"))
+
+rownames(dists) <- row.names(pData(my_set))
+hmcol <- rev(colorRampPalette(RColorBrewer::brewer.pal(9, "YlOrRd"))(255))
+colnames(dists) <- NULL
+diag(dists) <- NA
+
+ann_colors <- list(
+  subtype= c("TNBC" = "chartreuse4", "Her2+" = "burlywood3", "ER+" = "purple"),
+  Batch = c(b1= "blue4", b2 = "cadetblue2")
+                   )
+pheatmap(dists, col = (hmcol), cluster_rows = T,
+         annotation_row = annotation_for_heatmap,
+         annotation_colors = ann_colors,
+         legend = TRUE, 
+         treeheight_row = 0,
+         legend_breaks = c(min(dists, na.rm = TRUE), 
+                         max(dists, na.rm = TRUE)), 
+         legend_labels = (c("small distance", "large distance")),
+         main = "Clustering heatmap for the calibrated samples")
+```
+
 
 ### PCA Cancer Subtypes
 *2 groups - largely driven by batch*
@@ -261,7 +298,8 @@ percentVar <- round(100*PCA$sdev^2/sum(PCA$sdev^2),1)
 sd_ratio <- sqrt(percentVar[2] / percentVar[1])
 
 dataGG <- data.frame(PC1 = PCA$x[,1], PC2 = PCA$x[,2],
-                    Subtype = my_set$group)
+                    Subtype = my_set$group,
+                    Batch = my_set$Characteristics..batch.)
 
 
 ggscatter(dataGG, x="PC1", y="PC2",
@@ -390,6 +428,33 @@ ggscatter(dataGG, x="PC1", y="PC2",
                   theme(legend.position = "right") + 
                   theme(plot.title = element_text(hjust = 0.5, face = "bold"))
 ```
+
+## Sample heatmap (batch correcetd)
+
+
+```{r}
+dists <- as.matrix(dist(t(rm_batch), method = "manhattan"))
+
+rownames(dists) <- row.names(pData(my_set))
+hmcol <- rev(colorRampPalette(RColorBrewer::brewer.pal(9, "YlOrRd"))(255))
+colnames(dists) <- NULL
+diag(dists) <- NA
+
+ann_colors <- list(
+  subtype= c("TNBC" = "chartreuse4", "Her2+" = "burlywood3", "ER+" = "purple"),
+  Batch = c(b1= "blue4", b2 = "cadetblue2")
+                   )
+pheatmap(dists, col = (hmcol),
+         annotation_row = annotation_for_heatmap,
+         annotation_colors = ann_colors,
+         legend = TRUE,
+         treeheight_row = 0,
+         legend_breaks = c(min(dists, na.rm = TRUE), 
+                         max(dists, na.rm = TRUE)), 
+         legend_labels = (c("small distance", "large distance")),
+         main = "Clustering heatmap for the calibrated samples")
+```
+
 
 # Differentially Expressed Genes
 ## No coefficient
@@ -580,6 +645,10 @@ overlap_entrez <- AnnotationDbi::select(hs,
 
 # no biological process (BP)
 ```{r}
+library(DOSE)
+library(clusterProfiler)
+library(AnnotationHub)
+library(ensembldb)
 ego <- enrichGO(gene = overlap_entrez$ENTREZID, 
                 keyType = "ENTREZID",
                 OrgDb = org.Hs.eg.db, 
