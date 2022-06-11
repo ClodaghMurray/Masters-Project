@@ -433,7 +433,7 @@ ggscatter(dataGG, x="PC1", y="PC2",
 
 
 ```{r}
-dists <- as.matrix(dist(t(rm_batch), method = "manhattan"))
+dists <- as.matrix(dist(t(log2(rm_batch)), method = "manhattan"))
 
 rownames(dists) <- row.names(pData(my_set))
 hmcol <- rev(colorRampPalette(RColorBrewer::brewer.pal(9, "YlOrRd"))(255))
@@ -452,7 +452,7 @@ pheatmap(dists, col = (hmcol),
          legend_breaks = c(min(dists, na.rm = TRUE), 
                          max(dists, na.rm = TRUE)), 
          legend_labels = (c("small distance", "large distance")),
-         main = "Clustering heatmap for the calibrated samples")
+         main = "Clustering heatmap for normalized batch corrected samples")
 ```
 
 
@@ -661,8 +661,8 @@ ego <- enrichGO(gene = overlap_entrez$ENTREZID,
 #cluster_BP_summary <- data.frame(ego)
 #View(cluster_BP_summary)
 #pdf(file='/home/clodagh/MASTERS PROJECT/GSE37614/overlap_BP.pdf')
-#dotplot(ego, showCategory=10) + ggtitle("410 Overlapping DEGs GO (Cellular Compartment)")  +
- # theme_classic()
+dotplot(ego, showCategory=10) + ggtitle("410 Overlapping DEGs GO (Cellular Compartment)")  +
+ theme_classic()
 dev.off()
 ```
 
@@ -702,6 +702,8 @@ dotplot(ego, showCategory=10) + ggtitle("410 Overlapping DEGs GO (Molecular Func
   theme_classic()
 dev.off()
 ```
+
+
 # Fold change over 2
 ### (ER-Her2)
 ```{r}
@@ -718,7 +720,7 @@ nrow(up_reg_fc2_)
 # combind sig genes fc > 2
 
 ```{r}
-up_reg_names <- c(rownames(up_reg_fc2), rownames(up_reg_fc2_))
+up_reg_names <- c(rownames(up_reg_fc1), rownames(up_reg_fc2_))
 both_sig_exprs <- e[rownames(e) %in% up_reg_names,]
 both_sig_exprs <- t(both_sig_exprs)
 both_sig_exprs <- scale(both_sig_exprs, center=T, scale = T)
@@ -738,6 +740,32 @@ pheatmap(both_sig_exprs[,ord], color = heat.colors, cluster_rows = T, show_rowna
 annotation= annot_col, border_color=NA, fontsize = 10, scale="row",
      fontsize_row = 10, height=20, main = "Top 27 DEGs (fold change > 2)")
 ```
+
+# GSEA of 27 log fc >2
+
+```{r}
+fc2_entrez <-  AnnotationDbi::select(hs, 
+       keys = rownames(both_sig_exprs),
+       columns = c("ENTREZID", "SYMBOL"),
+       keytype = "SYMBOL")
+
+ego <- enrichGO(gene = fc2_entrez$ENTREZID, 
+                keyType = "ENTREZID",
+                OrgDb = org.Hs.eg.db, 
+                ont = "MF", #Biological Processes GO term, also done for CC and MF
+                pAdjustMethod = "BH", 
+                qvalueCutoff = 0.05, 
+                readable = TRUE)
+
+
+cluster_BP_summary <- data.frame(ego)
+View(cluster_BP_summary)
+pdf(file='/home/clodagh/MASTERS PROJECT/GSE37614/DEGs_BP.pdf')
+dotplot(ego, showCategory=10) + ggtitle("GSE37614 LogFC >2 GO (Molecular Function)")  +
+  theme_classic()
+dev.off()
+```
+
 
 
 
