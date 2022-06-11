@@ -643,31 +643,15 @@ overlap_entrez <- AnnotationDbi::select(hs,
 ```
 # DEGs overlap GSEA 
 
-# no biological process (BP)
+
 ```{r}
 library(DOSE)
 library(clusterProfiler)
 library(AnnotationHub)
 library(ensembldb)
-ego <- enrichGO(gene = overlap_entrez$ENTREZID, 
-                keyType = "ENTREZID",
-                OrgDb = org.Hs.eg.db, 
-                ont = "BP", #Biological Processes GO term, also done for CC and MF
-                pAdjustMethod = "BH", 
-                qvalueCutoff = 0.05, 
-                readable = TRUE)
-
-
-#cluster_BP_summary <- data.frame(ego)
-#View(cluster_BP_summary)
-#pdf(file='/home/clodagh/MASTERS PROJECT/GSE37614/overlap_BP.pdf')
-dotplot(ego, showCategory=10) + ggtitle("410 Overlapping DEGs GO (Cellular Compartment)")  +
- theme_classic()
-dev.off()
-```
+# no biological process (BP)
 
 # Cellular Compartment
-```{r}
 ego <- enrichGO(gene = overlap_entrez$ENTREZID, 
                 keyType = "ENTREZID",
                 OrgDb = org.Hs.eg.db, 

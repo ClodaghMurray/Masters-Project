@@ -1,0 +1,292 @@
+---
+title: "GSE108565"
+author: "Clodagh Murray"
+date: "6/12/2022"
+output: html_document
+---
+
+
+```{r}
+setwd("/home/clodagh/MASTERS PROJECT/GSE108565/")
+library(GEOquery)
+library(GEOquery)
+library(limma)
+library(umap)
+library(dplyr)
+```
+
+# Load in data
+Expression data were normalized through quantile normalization, and the Robust Multichip Average (RMA) algorithm was included in the NimbleScan software
+
+```{r}
+# load series and platform data from GEO
+gset <- getGEO("GSE108565", GSEMatrix =TRUE, AnnotGPL=FALSE)
+gset <- gset[[1]]
+gset@annotation
+x <- exprs(gset)
+write.csv(x = x, file = "/home/clodagh/MASTERS PROJECT/GSE108565.expression.matrix.csv", quote = F, row.names = F) #export expression matrix in file (.csv format).
+meta <- pData(gset)
+meta <- meta[ ,c("geo_accession","neo-adjuvant chemotherapy:ch1")]
+```
+
+## General Data pre-processing 
+```{r}
+sml <- as.character(as.numeric(as.factor(meta$`neo-adjuvant chemotherapy:ch1`)))
+gs <- factor(sml)
+groups <- meta$`neo-adjuvant chemotherapy:ch1`# HER2+ER+ sample? 
+orientation <- unique(groups)
+levels(gs) <- orientation
+gset@phenoData$group <- gs
+ord <- order(gs)
+
+palette <- palette(c("#1B9E77", "#7570B3"))
+
+par(mar=c(7,4,2,1))
+title <- "GSE108565 Log2 Raw Signals"
+boxplot(exprs(gset[,ord]), boxwex=0.6, notch=T, main=title, outline=FALSE, las=2, col=gs[ord])
+legend("topleft",orientation, fill=palette(), bty="n")
+```
+
+```{r}
+ex <- exprs(gset)
+par(mar=c(4,4,2,1))
+title <- paste ("Normalized Expression Density", sep ="")
+limma::plotDensities(ex, group=gs, main=title, legend ="topright")
+```
+
+
+
+# Probe Filtering
+## Remove multi-mapping probes
+```{r}
+annotations <- read.table("/home/clodagh/MASTERS PROJECT/GSE108565/A-GEOD-16025.adf.txt", header=T, sep="\t")
+
+mart <- biomaRt::useMart(biomart = "ensembl", dataset = "hsapiens_gene_ensembl")
+attr <- biomaRt::listAttributes(mart)
+genbank_map <- biomaRt::getBM(attributes = c("refseq_mrna", "hgnc_symbol", "gene_biotype"), mart = mart, useCache = FALSE)
+genbank_map <- genbank_map[!(is.na(genbank_map$refseq_mrna) | genbank_map$refseq_mrna==""),]
+genbank_map <- subset(genbank_map, genbank_map$gene_biotype == "protein_coding")
+
+# merge
+master <- merge(genbank_map, annotations, by.x="refseq_mrna", by.y="Reporter.Database.Entry..genbank.")
+
+master_sub <- master[,c(4,2)]
+master_sub <- master_sub[!(is.na(master_sub$hgnc_symbol) | master_sub$hgnc_symbol==""),]
+
+# remove multi mapping probes
+master_sub <- master_sub %>% distinct(hgnc_symbol, .keep_all = T)
+dim(master_sub)
+```
+
+```{r}
+qnorm <- subset(x, rownames(x) %in% master_sub$Reporter.Name)
+dim(qnorm)
+```
+```{r}
+master_sub <- master_sub[match(rownames(qnorm), master_sub$Reporter.Name),]
+rownames(qnorm) <- master_sub$hgnc_symbol
+head(qnorm[1:3,1:3])
+```
+
+
+```{r}
+# Probe filtering
+medians <- rowMedians(qnorm)
+
+hist(medians, 150, col = "cornsilk1", freq = FALSE, 
+             main = "Histogram of the median intensities", 
+             border = "antiquewhite4", xlab = "Median intensities")
+```
+
+
+
+```{r}
+library(gplots)
+lab <- paste(meta$`neo-adjuvant chemotherapy:ch1`)
+heatmap.2(cor(qnorm)^2, trace="none", scale="none", margins=c(9,9), labRow=lab, 
+labCol=lab )
+```
+
+## pca PLot 
+```{r}
+library(ggpubr)
+library(ggplot2)
+
+PCA <- prcomp(t(log2(qnorm)), scale = TRUE)
+percentVar <- round(100*PCA$sdev^2/sum(PCA$sdev^2),1)
+sd_ratio <- sqrt(percentVar[2] / percentVar[1])
+
+dataGG <- data.frame(PC1 = PCA$x[,1], PC2 = PCA$x[,2],
+                    group = gset$group)
+
+
+ggscatter(dataGG, x="PC1", y="PC2",
+                  color = "group", palette = c("dodgerblue4", "darkorange2", "chartreuse", "purple"),
+                  title = "PCA plot log-transformed quantile normalized expression data",
+                  subtitle = "Cancer Subtypes",
+                  xlab = paste0("PC1, VarExp: ", percentVar[1], "%"),
+                  ylab = paste0("PC2, VarExp: ", percentVar[2], "%"),
+                  ellipse = T, star.plot = T, 
+                  ggtheme = theme_bw()) + 
+                  theme(legend.position = "right") + 
+                  theme(plot.title = element_text(hjust = 0.5, face = "bold"))
+```
+
+
+
+
+
+```{r}
+colors <- as.numeric(factor(gset$group))
+plotMDS(qnorm, labels=lab, col=colors)
+```
+
+
+# Differential Expression
+
+
+```{r}
+design <- model.matrix(~0 + groups)
+
+colnames(design) <- levels(gs)
+
+aw <- arrayWeights(gset, design)  
+barplot(aw)
+fit <- lmFit(qnorm, design, weight =aw)  # fit linear model
+
+# set up contrasts of interest and recalculate model coefficients
+cts <- "resistant-sensitive"
+cont.matrix <- makeContrasts(contrasts=cts, levels=design)
+fit2 <- contrasts.fit(fit, cont.matrix)
+```
+
+```{r}
+# compute statistics and table of top significant genes
+fit2 <- eBayes(fit2, 0.01)
+```
+
+
+# Differentially Expressed Genes
+```{r}
+tT <- topTable(fit2, adjust="fdr", sort.by="B", number=Inf)
+
+tT <- subset(tT, select=c("logFC","adj.P.Val","P.Value","t","B","logFC"))
+#write.table(tT, file=stdout(), row.names=F, sep="\t")
+
+sig <- tT[tT$adj.P.Val <= 0.05 & abs(tT$logFC)>= 1, ];
+dim(sig)
+
+#write.table(sig, "GSE108565_DEG_list.csv", sep="\t", row.names=FALSE)
+
+#Extract the expression values for the DEGs
+sig_exprs <- qnorm[rownames(qnorm) %in% as.character(rownames(sig)),]
+Gene <- rownames(sig_exprs)
+
+dim(sig_exprs)
+```
+
+# Visualise DEGs
+
+
+```{r}
+# Make a basic volcano plot
+with(tT, plot(logFC, -log10(adj.P.Val), pch=20, main="Volcano plot", xlim=c(-10,10)))
+
+# Add colored points: red if padj<0.05, orange of log2FC>1, green if both)
+with(subset(tT,adj.P.Val<.05 ), points(logFC, -log10(adj.P.Val), pch=20, col="red"))
+with(subset(tT, abs(logFC)>1), points(logFC, -log10(adj.P.Val), pch=20, col="orange"))
+with(subset(tT,adj.P.Val<.05 & abs(logFC)>1), points(logFC, -log10(adj.P.Val), pch=20, col="green"))
+
+
+# Label points with the textxy function from the calibrate plot
+#library(calibrate)
+#with(subset(tT,adj.P.Val<.05 & abs(logFC)>4), textxy(logFC, -log10(P.Value), #labs=Gene, cex=.8))
+```
+
+```{r}
+#Create volcano plot for DEGs.
+
+plot(tT$logFC, -log10(tT$adj.P.Val), pch="*", xlab="Log2 Fold Change", ylab="-10log (adjusted p-value)")
+abline(h=-log10(0.05), v=c(-1, 1), col="red", lty=2)
+points(sig$logFC, -log10(sig$adj.P.Val), col="red", pch="*")
+```
+
+```{r}
+library(pheatmap)
+pheatmap(sig_exprs, trace="none", scale="row", cexRow=0.2, cexCol=0.7, ColSideColors = sml, show_rownames = F, cluster_cols = T,)
+```
+
+
+
+
+```{r}
+# Visualize and quality control test results.
+# Build histogram of P-values for all genes. Normal test
+# assumption is that most genes are not differentially expressed.
+tT2 <- topTable(fit2, adjust="fdr", sort.by="B", number=Inf)
+hist(tT2$adj.P.Val, col = "grey", border = "white", xlab = "P-adj",
+  ylab = "Number of genes", main = "P-adj value distribution")
+
+# summarize test results as "up", "down" or "not expressed"
+dT <- decideTests(fit2, adjust.method="fdr", p.value=0.05)
+
+# Venn diagram of results
+vennDiagram(dT, circle.col=palette())
+
+# create Q-Q plot for t-statistic
+t.good <- which(!is.na(fit2$F)) # filter out bad probes
+qqt(fit2$t[t.good], fit2$df.total[t.good], main="Moderated t statistic")
+
+# volcano plot (log P-value vs log fold change)
+colnames(fit2) # list contrast names
+ct <- 1        # choose contrast of interest
+volcanoplot(fit2, coef=ct, main=colnames(fit2)[ct], pch=20,
+  highlight=length(which(dT[,ct]!=0)), names=rep('+', nrow(fit2)))
+
+# MD plot (log fold change vs mean log expression)
+# highlight statistically significant (p-adj < 0.05) probes
+plotMD(fit2, column=ct, status=dT[,ct], legend=F, pch=20, cex=1)
+abline(h=0)
+```
+
+```{r}
+################################################################
+# General expression data analysis
+
+# box-and-whisker plot
+ord <- order(gs)  # order samples by group
+palette(c("#1B9E77", "#7570B3", "#E7298A", "#E6AB02", "#D95F02",
+          "#66A61E", "#A6761D", "#B32424", "#B324B3", "#666666"))
+par(mar=c(7,4,2,1))
+title <- paste ("GSE108565", "/", annotation(gset), sep ="")
+boxplot(ex[,ord], boxwex=0.6, notch=T, main=title, outline=FALSE, las=2, col=gs[ord])
+legend("topleft", groups, fill=palette(), bty="n")
+
+# expression value distribution
+par(mar=c(4,4,2,1))
+title <- paste ("GSE108565", "/", annotation(gset), " value distribution", sep ="")
+plotDensities(log2(ex), group=gs, main=title, legend ="topright")
+```
+
+```{r}
+# UMAP plot (dimensionality reduction)
+ex <- na.omit(ex) # eliminate rows with NAs
+ex <- ex[!duplicated(ex), ]  # remove duplicates
+ump <- umap(t(ex), n_neighbors = 6, random_state = 123)
+par(mar=c(3,3,2,6), xpd=TRUE)
+plot(ump$layout, main="UMAP plot, nbrs=6", xlab="", ylab="", col=gs, pch=20, cex=1.5)
+legend("topright", inset=c(-0.15,0), legend=levels(gs), pch=20,
+col=1:nlevels(gs), title="Group", pt.cex=1.5)
+library("maptools")  # point labels without overlaps
+pointLabel(ump$layout, labels = rownames(ump$layout), method="SANN", cex=0.6)
+
+# mean-variance trend, helps to see if precision weights are needed
+plotSA(fit2, main="Mean variance trend, GSE108565")
+
+```
+
+
+
+
+
+

@@ -25,16 +25,19 @@ library(genefilter)
 ```{r}
 # read in quantile normalized log2 data with batch effects removed
 rm_batch <- read.csv("/home/clodagh/MASTERS PROJECT/GSE37614/GSE37614_counts_matrix.txt", header = T, sep= "\t")
-rm_batch <- as.matrix(rm_batch[,-23])
-counts_data2 <- varFilter(rm_batch) #filter threshold top 50% of most variable genes 
-dim(counts_data2) #half of counts_data
+rm_batch <- as.matrix(rm_batch)
+rm_batch <- varFilter(rm_batch) #filter threshold top 50% of most variable genes 
+dim(rm_batch) # top 70% most variable genes of data
 ```
 
 ```{r}
 #rows as samples, columns as genes
-norm_counts <- as.data.frame(t(counts_data2))
+datExpr <- as.data.frame(t(rm_batch))
+datExpr=datExpr[, rank(-k,ties.method="first" )<=3600]
+write.csv(datExpr, file = '/home/clodagh/MASTERS PROJECT/GSE37614/datExpr.csv', row.names = T)
 #write.csv(norm_counts, file = "/home/clodagh/MASTERS PROJECT/GSE37614/norm_counts_varFiltered.csv", row.names = T)
-gsg = goodSamplesGenes(norm_counts, verbose = 3);
+## Step by step WGCN construction
+gsg = goodSamplesGenes(datExpr, verbose = 3);
 gsg$allOK
 ```
 
@@ -42,7 +45,7 @@ gsg$allOK
 ## Detect outliers
 
 ```{r}
-sampleTree = hclust(dist(norm_counts), method = "average");
+sampleTree = hclust(dist(datExpr), method = "average");
 # Plot the sample tree: Open a graphic output window of size 12 by 9 inches
 # The user should change the dimensions if the window is too large or too small.
 sizeGrWindow(12,9)
@@ -51,14 +54,14 @@ par(cex = 0.6);
 par(mar = c(0,4,2,0))
 plot(sampleTree, main = "Sample clustering to detect outliers", sub="", xlab="", cex.lab = 1.5, cex.axis = 1.5, cex.main = 2)
 # Plot a line to show the cut
-abline(h = 55, col = "red")
+abline(h = 60, col = "red")
 
 ```
 # Make metadata with matching colnames
 ```{r}
 meta <- read.csv("/home/clodagh/MASTERS PROJECT/GSE37614/metadata.csv", sep = "\t")
-meta <- meta[-23,]
-samps = rownames(norm_counts);
+meta[23,]$Cancer_Subtype <- "Her2+"
+samps = rownames(datExpr);
 traitRows = match(samps, rownames(meta))
 datTraits = meta[traitRows, ]
 ind <- as.numeric(as.factor(datTraits$Cancer_Subtype))
@@ -73,7 +76,7 @@ datTraits <- data.frame(TNBC, ER, HER)
 rownames(datTraits) = samps
 
 # check pheontype data corresponds to exp data
-table(rownames(datTraits) == rownames(norm_counts))   
+table(rownames(datTraits) == rownames(datExpr))   
 ```
 Network Construction; selecting a similarity metric
 
@@ -85,7 +88,7 @@ Network Construction; selecting a similarity metric
 
 ```{r}
 powers= c(c(1:10), seq(from =12, to=30, by=2)) #choosing a set of soft-thresholding powers
-sft = pickSoftThreshold(norm_counts, powerVector=powers, networkType = "signed", verbose =0) #call network topology analysis function
+sft = pickSoftThreshold(datExpr, powerVector=powers, dataIsExpr = T, networkType = "signed", verbose =2, corFnc = "bicor") #call network topology analysis function
 ```
 
 ```{r}
@@ -95,24 +98,21 @@ cex1=0.9
 # Scale-free topology fit index as a function of the soft-thresholding power
 plot(sft$fitIndices[,1], -sign(sft$fitIndices[,3])*sft$fitIndices[,2], xlab= "Soft Threshold (power)", ylab="Scale Free Topology Model Fit, signed R^2", type= "n", main= paste("Scale independence"))
 text(sft$fitIndices[,1], -sign(sft$fitIndices[,3])*sft$fitIndices[,2], labels=powers, cex=cex1, col="red")
-abline(h=0.90, col="red")
+abline(h=0.85, col="red")
 plot(sft$fitIndices[,1], sft$fitIndices[,5], xlab= "Soft Threshold (power)", ylab="Mean Connectivity", type="n", main = paste("Mean connectivity"))
 text(sft$fitIndices[,1], sft$fitIndices[,5], labels=powers, cex=cex1, col="red")
 
 ```
 
 
-## Step by step WGCN construction
-# For computational reasons, restrict to 5000 most connected genes
-```{r}
-datExpr=norm_counts[, rank(-k,ties.method="first" )<=5000]
-```
 
 # Adjacency - check scale freeness
 ```{r}
-softpower = 22
+softpower = 19
 #plot adj in next section
-adj= adjacency(datExpr,type = "signed", power = softpower)
+adj= adjacency(datExpr,type = "signed", power = softpower, corFnc = "bicor")
+#head(adj[1:5,1:5])
+# corFnc defaults to Pearson 
 # When you have relatively few genes (<5000) use the following code
 k=as.vector(apply(adj,2,sum, na.rm=T))
 # When you have a lot of genes use the following code
@@ -127,10 +127,8 @@ scaleFreePlot(k, main="Check scale free topology\n")
 ```
 
 
-
+# TOM from adjacency
 ```{r}
-#head(adj[1:5,1:5])
-# corFnc defaults to Pearson 
 # topological overlap matrix: transform adj into TOM to minimise effects of noise and spurious associations
 # The TOM describes how well connected the genes are in respect of how many neighbors they share. 
 # idea of TOM is to count the direct connection strengths as well as connection strengths “mediated” by shared neighbors
@@ -158,15 +156,15 @@ colnames(adj) <- gene_ids
 heatmap_indices <- sample(nrow(adj), 500)
 #we can still see here a subset of genes highly correlated... not ideal as ideally want sparseness but can see some genes v similiar correlation of expression
 #command used to plot multiple adj.
-pdf(file="/home/clodagh/MASTERS PROJECT/GSE37614/adj_matrix_22thresh.pdf")
+#pdf(file="/home/clodagh/MASTERS PROJECT/GSE37614/adj_matrix_22thresh.pdf")
 heatmap.2(t(adj[heatmap_indices, heatmap_indices]),
             col=redgreen(75),
             labRow=NA, labCol=NA, 
             trace='none', dendrogram='row',
             xlab='Gene', ylab='Gene',
-            main='     Adjacency matrix (pearson, power:22)',
+            main='     Adjacency matrix (pearson, power:19)',
             density.info='none', revC=TRUE)
-dev.off()
+#dev.off()
 ```
 
 Module Definition; hierarchical clustering and tree cutting to define modules of co-expressed genes
@@ -187,7 +185,9 @@ sizeGrWindow(12,9)
 plot(geneTree, xlab="", sub="", main = "Gene clustering on TOM-based dissimilarity",
 labels = FALSE, hang = 0.04)
 
+```
 
+```{r}
 # Module identification using dynamic tree cut: 
 #step 1: detection of clusters
 #deepsplit; how finely branches should be split; higher value more smaller modules, lower value fewer larger modules
@@ -200,7 +200,7 @@ minModuleSize = 30
 dynamicMods = cutreeDynamic(dendro = geneTree, distM = dissTOM,
 deepSplit = 2, pamStage = F, pamRespectsDendro = FALSE,
 minClusterSize = minModuleSize);
-table(dynamicMods) #44 modules detected
+table(dynamicMods) # 39 modules detected
 collectGarbage()
 
 ```
@@ -281,8 +281,8 @@ myheatcol = colorpanel(250,'red',"orange",'lemonchiffon')
 
 # For reproducibility, we set the random seed
 set.seed(10);
-nSelect = 4000
-select = sample(ncol(datExpr), size = nSelect);
+#nSelect = 4000
+select = sample(ncol(datExpr), size = 3000);
 selectTOM = dissTOM[select, select];
 # no simple way of restricting a clustering tree to a subset of genes, so we must re-cluster.
 selectTree = hclust(as.dist(selectTOM), method = "average")
@@ -293,7 +293,7 @@ sizeGrWindow(9,9)
 plotDiss = selectTOM^9;
 diag(plotDiss) = NA;
 #takes long time to write out to pdf
-pdf(file = '/home/clodagh/MASTERS PROJECT/GSE37614/gene_network_heatmap.pdf', wi = 9, he = 6)
+#pdf(file = '/home/clodagh/MASTERS PROJECT/GSE37614/gene_network_heatmap.pdf', wi = 9, he = 6)
 TOMplot(plotDiss, selectTree, selectColors, main = "Network heatmap plot", col= myheatcol)
 #dev.off()
 ```
@@ -429,7 +429,7 @@ pdf(file = '/home/clodagh/MASTERS PROJECT/GSE37614/GSvsMMplot.pdf')
 colorOfColumn = substring(names(MEs), 3)
 colorOfColumn
 par(mfrow = c(2, 2))
-selectModules = c("darkturquoise", "darkgreen", "darkmagenta")
+selectModules = c("darkolivegreen", "blue", "violet")
 #par(mfrow = c(2, length(selectModules)/2))
 for (module in selectModules) {
     column = match(module, colorOfColumn)
@@ -461,7 +461,7 @@ MS_order
 #relationship between gene significance in a intramodular connectivity
 pdf(file = '/home/clodagh/MASTERS PROJECT/GSE37614/GSvsIntraModConnect.pdf')
 colorlevels=unique(moduleColors)
-rm_colorlevels = c("salmon","red","saddlebrown", "brown", "turquoise", "black", "magenta", "lightgreen", "midnightblue", "green" )
+rm_colorlevels = c("purple","darkmagenta","lightgreen","darkgreen", "orangered4","grey60", "turquoise", "yellow")
 colorlevels <- colorlevels[! colorlevels %in% rm_colorlevels]
 colorlevels
 #sizeGrWindow(9,6)
@@ -487,9 +487,9 @@ Write out results for genes with their module membership values
 
 ```{r}
 # modules of interest for HER2
-names(datExpr)[moduleColors=="darkturquoise"] 
-names(datExpr)[moduleColors=="darkgreen"] 
-names(datExpr)[moduleColors=="darkmagenta"] 
+names(datExpr)[moduleColors=="darkolivegreen"] 
+names(datExpr)[moduleColors== "blue"] 
+names(datExpr)[moduleColors== "violet"] 
 #create geneinfo dataframe
 geneInfo0 <- data.frame(Entrez_ID = names(datExpr), 
                        module_Colour = moduleColors,
@@ -518,7 +518,7 @@ write.csv(geneInfo, file = "/home/clodagh/MASTERS PROJECT/GSE37614/geneInfo.csv"
 Genes highly significantly associated with a trait are often also the most important (central) elements of modules associated with the trait
 
 ```{r}
-module = "darkturquoise"
+module = "darkolivegreen"
 column = match(module, modNames);
 moduleGenes = moduleColors==module;
 sizeGrWindow(7, 7);
@@ -533,7 +533,7 @@ cex.main = 1.2, cex.lab = 1.2, cex.axis = 1.2, col = module)
 
 
 ```{r}
-module = "darkgreen"
+module = "blue"
 column = match(module, modNames);
 moduleGenes = moduleColors==module;
 sizeGrWindow(7, 7);
@@ -545,6 +545,21 @@ ylab = "Gene significance for HER2 status",
 main = paste("Module membership vs. gene significance\n"),
 cex.main = 1.2, cex.lab = 1.2, cex.axis = 1.2, col = module)
 ```
+
+```{r}
+module = "violet"
+column = match(module, modNames);
+moduleGenes = moduleColors==module;
+sizeGrWindow(7, 7);
+par(mfrow = c(1,1));
+verboseScatterplot(abs(geneModuleMembership[moduleGenes, column]),
+abs(geneTraitSignificance[moduleGenes, 1]),
+xlab = paste("Module Membership in", module, "module"),
+ylab = "Gene significance for HER2 status",
+main = paste("Module membership vs. gene significance\n"),
+cex.main = 1.2, cex.lab = 1.2, cex.axis = 1.2, col = module)
+```
+
 
 ## Annotate probes
 ```{r}
