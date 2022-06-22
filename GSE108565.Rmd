@@ -63,19 +63,22 @@ annotations <- read.table("/home/clodagh/MASTERS PROJECT/GSE108565/A-GEOD-16025.
 
 mart <- biomaRt::useMart(biomart = "ensembl", dataset = "hsapiens_gene_ensembl")
 attr <- biomaRt::listAttributes(mart)
-genbank_map <- biomaRt::getBM(attributes = c("refseq_mrna", "hgnc_symbol", "gene_biotype"), mart = mart, useCache = FALSE)
+attr$name
+genbank_map <- biomaRt::getBM(attributes = c("refseq_mrna", "hgnc_symbol", "gene_biotype", "entrezgene_id"), mart = mart, useCache = TRUE)
 genbank_map <- genbank_map[!(is.na(genbank_map$refseq_mrna) | genbank_map$refseq_mrna==""),]
 genbank_map <- subset(genbank_map, genbank_map$gene_biotype == "protein_coding")
 
 # merge
 master <- merge(genbank_map, annotations, by.x="refseq_mrna", by.y="Reporter.Database.Entry..genbank.")
 
-master_sub <- master[,c(4,2)]
-master_sub <- master_sub[!(is.na(master_sub$hgnc_symbol) | master_sub$hgnc_symbol==""),]
+master_sub <- master[,c(5,4,2)]
+# remove all probes without entrezid mapping
+master_sub <- master_sub[!(is.na(master_sub$entrezgene_id) | master_sub$entrezgene_id=="") | !(is.na(master_sub$hgnc_symbol) | master_sub$hgnc_symbol==""),]
 
 # remove multi mapping probes
+master_sub <- master_sub %>% distinct(entrezgene_id, .keep_all = T)
 master_sub <- master_sub %>% distinct(hgnc_symbol, .keep_all = T)
-dim(master_sub)
+ #remove duplicates
 ```
 
 ```{r}
@@ -174,14 +177,18 @@ tT <- topTable(fit2, adjust="fdr", sort.by="B", number=Inf)
 tT <- subset(tT, select=c("logFC","adj.P.Val","P.Value","t","B","logFC"))
 #write.table(tT, file=stdout(), row.names=F, sep="\t")
 
+# significant genes have p val under 0.05 and over 1 logFC
 sig <- tT[tT$adj.P.Val <= 0.05 & abs(tT$logFC)>= 1, ];
 #write.table(sig, "GSE108565_DEG_list.csv", sep="\t", row.names=FALSE)
 
-#Extract the expression values for the DEGs
-sig_exprs <- qnorm[rownames(qnorm) %in% as.character(rownames(sig)),]
-Gene <- rownames(sig_exprs)
+dim(sig) # 381 DEGs
 
+#Extract the expression values for the DEGs
+sig_exprs <- qnorm[rownames(qnorm) %in% rownames(sig),]
+# sig exprs gene symbols
+Gene <- rownames(sig_exprs)
 dim(sig_exprs)
+
 ```
 
 # Visualise DEGs
@@ -253,6 +260,7 @@ allGO2genes <- annFUN.org(whichOnto="BP", feasibleGenes=NULL, mapping="org.Hs.eg
 
 GOdata <- new("topGOdata", ontology="BP", allGenes=list, annot=annFUN.GO2genes, GO2genes=allGO2genes, geneSel=selection, nodeSize=10)
 ```
+
 ## Perform Enrichment 
 ```{r}
 results.ks <- runTest(GOdata, algorithm="classic", statistic="ks")
@@ -625,11 +633,12 @@ the Module Membership measure.
 library(org.Hs.eg.db)
 hs <- org.Hs.eg.db
 #background set
-probes = colnames(datExpr)
-probes2annot = AnnotationDbi::select(hs, 
+probes = rownames(qnorm) #17180 genes = universe
+probes2annot <- AnnotationDbi::select(hs, 
        keys = probes,
        columns = c("ENTREZID", "SYMBOL"),
        keytype = "SYMBOL")
+probes2annot
 entrez <- match(probes, probes2annot$SYMBOL)
 # the following is the number or probes without annotation:
 sum(is.na(probes2annot))
@@ -886,11 +895,12 @@ annot <- AnnotationDbi::select(hs,
 # Select modules
 modules = c("paleturquoise");
 # Select module probes
-probes = names(datExpr)
+probes = rownames(qnorm) #17180 genes = universe
 probes<- AnnotationDbi::select(hs, 
        keys = probes,
        columns = c("ENTREZID", "SYMBOL"),
        keytype = "SYMBOL")
+
 inModule = is.finite(match(moduleColors, modules));
 modProbes = probes[inModule,];
 
@@ -899,12 +909,13 @@ modGenes = annot$SYMBOL[match(modProbes$ENTREZID, annot$ENTREZID)];
 modTOM = TOM[inModule, inModule];
 
 dimnames(modTOM) = list(modProbes$ENTREZID, modProbes$ENTREZID)
+
 # Export the network into edge and node list files Cytoscape can read
 cyt = exportNetworkToCytoscape(modTOM,
 edgeFile = paste("CytoscapeInput-edges-", paste(modules, collapse="-"), ".txt", sep=""),
 nodeFile = paste("CytoscapeInput-nodes-", paste(modules, collapse="-"), ".txt", sep=""),
 weighted = TRUE,
-threshold = 0.28,
+threshold = 0.3,
 nodeNames = modProbes$ENTREZID,
 altNodeNames = modGenes,
 nodeAttr = moduleColors[inModule]);
