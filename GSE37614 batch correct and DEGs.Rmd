@@ -19,6 +19,7 @@ library(ggplot2)
 library(limma)
 library(RColorBrewer)
 library(pheatmap)
+library(PCAtools)
 ```
 
 ## Raw Data Staging
@@ -444,7 +445,7 @@ ann_colors <- list(
   subtype= c("TNBC" = "chartreuse4", "Her2+" = "burlywood3", "ER+" = "purple"),
   Batch = c(b1= "blue4", b2 = "cadetblue2")
                    )
-pheatmap(dists, col = (hmcol),
+pheatmap(dists[,ord], col = (hmcol),
          annotation_row = annotation_for_heatmap,
          annotation_colors = ann_colors,
          legend = TRUE,
@@ -461,7 +462,7 @@ pheatmap(dists, col = (hmcol),
 ```{r}
 # all genes with a p value < 0.05 and abs(logFC) over 0.5 for any contrast
 top1000 <- topTable(fit2, number = Inf)
-top_sig <- top1000[top1000$adj.P.Val <= 0.05 & (abs(top1000[,1]) > 0.5 | abs(top1000[,2]) > 0.5), ];
+top_sig <- top1000[top1000$adj.P.Val <= 0.05 & (abs(top1000[,1]) > 1 | abs(top1000[,2]) > 1), ];
 nrow(top_sig)                  
 ```
 ## Heatmap 
@@ -470,6 +471,8 @@ top_sigg <- rm_batch[rownames(rm_batch) %in% rownames(top_sig),]
 top_sigg<- t(top_sigg)
 top_sigg <- scale(top_sigg, center=T, scale = T)
 top_sigg <- t(top_sigg)
+# logFC >= 1 & adjusted p-value <= 0.05
+#write.table(top_sigg, "GSE37614_DEGs_overall.csv", row.names=T, sep="\t")
 
 annot_col <- data.frame(row.names = colnames(rm_batch), Group = factor(my_set$group))
 
@@ -483,10 +486,10 @@ library(viridis)
 
 ```{r}
 pheatmap::pheatmap(top_sigg[,ord], cluster_cols = F, cluster_rows = T, show_rownames = F,
-                   show_colnames = T, annotation_col = annot_col,
+                   show_colnames = F, annotation_col = annot_col,
                    annotation_colors = annot_colors,
                    col = hcl.colors(100, "Purple-Green",rev=F),
-                   cutree_cols = 4, main = "DEGS (logfc >0.5 & p. val < 0.05")
+                   cutree_cols = 4, main = "DEGS (logfc > 1 & p. val < 0.05")
 ```
 
 
@@ -513,11 +516,12 @@ sig_HER_ER <- rm_batch[rownames(rm_batch) %in% rownames(up_reg1),]
 sig_HER_ER  <- t(sig_HER_ER)
 sig_HER_ER  <- scale(sig_HER_ER , center=T, scale = T)
 sig_HER_ER  <- t(sig_HER_ER )
+
 pheatmap::pheatmap(sig_HER_ER[,ord], cluster_cols = F, cluster_rows = T, show_rownames = F,
-                   show_colnames = T, annotation_col = annot_col,
+                   show_colnames = F, annotation_col = annot_col,
                    annotation_colors = annot_colors,
-                   col = hcl.colors(100, "Purple-Green",rev=F),
-                   cutree_cols = 4, main =  "HER vs ER DEGs")
+                   col = redgreen(75),
+                   cutree_cols = 4, main ="HER vs ER DEGs (logFC >1 and p.val <0.05)")
 #heatmap.2(sig_HER_ER, trace="none", scale="row", col="redgreen", cexRow=0.2, cexCol=0.7, main = "HER vs ER DEGS")
 ```
 
@@ -548,7 +552,7 @@ sig_HER_TNBC  <- scale(sig_HER_TNBC , center=T, scale = T)
 sig_HER_TNBC  <- t(sig_HER_TNBC)
 
 pheatmap::pheatmap(sig_HER_TNBC[,ord], cluster_cols = F, cluster_rows = T, show_rownames = F,
-                   show_colnames = T, annotation_col = annot_col,
+                   show_colnames = F, annotation_col = annot_col,
                    annotation_colors = annot_colors,
                    col = hcl.colors(100, "Purple-Green",rev=F),
                    cutree_cols = 4, main =  "HER vs TNBC DEGs")
@@ -588,7 +592,7 @@ library(viridis)
 
 ```{r}
 pheatmap::pheatmap(sig_exprs[,ord], cluster_cols = F, cluster_rows = T, show_rownames = F,
-                   show_colnames = T, annotation_col = annot_col,
+                   show_colnames = F, annotation_col = annot_col,
                    annotation_colors = annot_colors,
                    col = hcl.colors(100, "Purple-Green",rev=F),
                    cutree_cols = 4, main = "DEGs (logFC > 1 & p.val < 0.05)")
@@ -598,9 +602,6 @@ pheatmap::pheatmap(sig_exprs[,ord], cluster_cols = F, cluster_rows = T, show_row
 ## Top Table
 
 ```{r}
-# logFC >= 0.5 & adjusted p-value <= 0.05
-write.table(top_sigg, "GSE37614_DEGs_overall.csv", row.names=T, sep="\t")
-
 DT::datatable(sig_exprs, rownames = T, select=c("ER.Her2", "Her2.TNBC", "TNBC.ER","adj.P.Val","P.Value","t"), options = list(scrollX = TRUE, pageLength = 7, scroller = TRUE))
 ```
 
@@ -623,7 +624,7 @@ intersect_plot <- e[rownames(e) %in% intersect_genes,]
 library(RColorBrewer)
 library(pheatmap)
 ### Set a color palette
-heat.colors <- brewer.pal(100, "YlOrRd")
+heat.colors <- brewer.pal(200, "YlOrRd")
 
 
 ### Run pheatmap
@@ -647,6 +648,7 @@ overlap_entrez <- AnnotationDbi::select(hs,
 ```{r}
 library(DOSE)
 library(clusterProfiler)
+BiocManager::install("ensembldb")
 library(AnnotationHub)
 library(ensembldb)
 # no biological process (BP)
