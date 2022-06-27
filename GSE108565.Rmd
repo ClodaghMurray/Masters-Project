@@ -202,7 +202,6 @@ pheatmap(sig_exprs[,ord], trace="none", scale="row", cexRow=0.2, cexCol=0.7, Col
 
 # Gene Ontology
 
-
 ```{r}
 list <- tT$adj.P.Val
 names(list) <- rownames(tT)
