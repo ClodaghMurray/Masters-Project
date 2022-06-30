@@ -102,7 +102,8 @@ and calculate the corresponding dissimilarity:
 # The TOM describes how well connected the genes are in respect of how many neighbors they share. 
 # idea of TOM is to count the direct connection strengths as well as connection strengths “mediated” by shared neighbors
 # signed network: preserves the sign of the relationship between the nodes while taking account the connections through shared neighbors in the same way the standard unsigned TOM does.
-dissTOM <- TOMdist(adj)
+#dissTOM <- TOMdist(adj)
+dissTOM <- read.csv('/home/clodagh/MASTERS PROJECT/GSE37614/GSE108565_dissTOM.txt', sep = "\t", row.names = 1)
 #write.table(dissTOM, file = '/home/clodagh/MASTERS PROJECT/GSE37614/GSE108565_dissTOM.txt', sep ='\t', col.names = T, row.names = T)
 #take the distance of the TOM matrix
 head(dissTOM[1:5,1:5])
@@ -574,12 +575,14 @@ From tutorial
 # Recalculate topological overlap if needed
 TOM = TOMsimilarityFromExpr(datExpr, power = 18, corType = "bicor", networkType = "signed hybrid");
 head(TOM[1:5,1:5])
+
 ```
 
 
 #Importing paleturquoise module
 
 ```{r}
+module = "paleturquoise"
 # Read in the annotation file
 annot <- AnnotationDbi::select(hs, 
        keys = colnames(datExpr),
@@ -597,9 +600,9 @@ modGenes = annot[inModule,]$ENTREZID;
 modTOM = TOM[inModule, inModule];
 dimnames(modTOM) = list(modGenes, modGenes)
 # Export the network into edge and node list files Cytoscape can read
-cyt = xportNetworkToCytoscape(modTOM,
-edgeFile = paste("CytoscapeInput-edges-", paste(modules, collapse="-"), ".txt", sep=""),
-nodeFile = paste("CytoscapeInput-nodes-", paste(modules, collapse="-"), ".txt", sep=""),
+cyt = exportNetworkToCytoscape(modTOM,
+edgeFile = paste("CytoscapeInput-edges-", paste(module, collapse="-"), "TOM0.05.txt", sep=""),
+nodeFile = paste("CytoscapeInput-nodes-", paste(module, collapse="-"), "TOM0.05.txt", sep=""),
 threshold = 0.25,
 nodeNames = modProbes,
 altNodeNames = modGenes,
