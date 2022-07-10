@@ -13,6 +13,7 @@ knitr::opts_chunk$set(echo = TRUE)
 
 ```{r}
 options(stringsAsFactors = FALSE)
+library(dplyr)
 library(genefilter)
 library(WGCNA)
 qnorm <- read.csv("/home/clodagh/MASTERS PROJECT/GSE37614/GSE108565_qnorm.csv", row.names = 1)
@@ -38,7 +39,7 @@ par(cex = 0.6);
 par(mar = c(0,4,2,0))
 plot(sampleTree, main = "Sample clustering to detect outliers", sub="", xlab="", cex.lab = 1.5, cex.axis = 1.5, cex.main = 2)
 # Plot a line to show the cut
-abline(h = 110, col = "red")
+abline(h = 115, col = "red")
 ```
 
 
@@ -195,6 +196,7 @@ addGuide = TRUE, guideHang = 0.05)
 Since we already have a summary profile (eigengene) for each module, we simply correlate eigengenes with external
 traits and look for the most significant associations
 ```{r}
+library(gplots)
 #heatmap colours
 myheatcol = colorpanel(250,'red',"orange",'lemonchiffon')
 # For reproducibility, we set the random seed
@@ -231,8 +233,9 @@ moduleColors = mergedColors
 colorOrder = c("grey", standardColors(50));
 moduleLabels = match(moduleColors, colorOrder)-1;
 MEs = mergedMEs
+table(moduleColors)
 # Save module colors and labels for use in subsequent parts
-#save(MEs, moduleLabels, moduleColors, geneTree, file = "/home/clodagh/MASTERS PROJECT/GSE37614/GSE108565_network_construction.RData")
+save(MEs, moduleLabels, moduleColors, geneTree, file = "/home/clodagh/MASTERS PROJECT/GSE37614/GSE108565_network_construction.RData")
 ```
 
 
@@ -250,25 +253,26 @@ moduleTraitPvalue = corPvalueStudent(moduleTraitCor, nSamples);
 # Form a data frame analogous to expression data that will hold the clinical traits.
 samples = rownames(datExpr);
 #pdf(file = '/home/clodagh/MASTERS PROJECT/GSE37614/GSE108565_MTR_plot.pdf')
-sizeGrWindow(12,6)
+png("/home/clodagh/MASTERS PROJECT/GSE37614/GSE108565_MTR.png")
+#sizeGrWindow(10,6)
 # Will display correlations and their p-values
 textMatrix = paste(signif(moduleTraitCor, 2), "\n(",
           signif(moduleTraitPvalue, 1), ")", sep = "");
 dim(textMatrix) = dim(moduleTraitCor)
-par(mar = c(10, 10, 5, 5));
+par(mar = c(6, 8.5, 3, 3));
 # Display the correlation values within a heatmap plot
 labeledHeatmap(Matrix = moduleTraitCor,
 xLabels = names(datTraits),
 yLabels = names(MEs),
 ySymbols = names(MEs),
-colorLabels = FALSE,
+colorLabels = TRUE,
 colors = blueWhiteRed(50),
 textMatrix = textMatrix,
-setStdMargins = FALSE,
+setStdMargins = F,
 cex.text = 0.5,
 zlim = c(-1,1),
 main = paste("Module-trait relationships"))
-#dev.off()
+dev.off();
 ```
 
 # Gene relationship to trait and important modules: Gene Significance and Module Membership
@@ -299,7 +303,7 @@ GeneSignificance=abs(GS2)
 # Next module significance is defined as average gene significance.
 ModuleSignificance=tapply(GeneSignificance, moduleColors, mean, na.rm=T)
 sizeGrWindow(12,6)
-#pdf(file = '/home/clodagh/MASTERS PROJECT/GSE37614/GSE108565_gene_sig_barplot.pdf')
+png(file = '/home/clodagh/MASTERS PROJECT/GSE37614/GSE108565_gene_sig_barplot.pdf')
 plotModuleSignificance(GeneSignificance, moduleColors) #could also use this to define pathway membership etc.
 ModuleSignificance
 #dev.off()
@@ -358,16 +362,27 @@ mod.paleturquoise_entrez <- mod.paleturquoise_entrez[rowSums(is.na(mod.paleturqu
 ```
 
 ```{r}
+library(topGO)
+library(Rgraphviz)
+library(ggplot2)
+library(enrichR)
 #265 genes all up regulated
+tT <- read.csv("/home/clodagh/MASTERS PROJECT/GSE37614/GSE108565_tT.csv", row.names = 1)
+
 list <- tT[mod.paleturquoise,]$adj.P.Val
 names(list) <- rownames(tT[mod.paleturquoise,])
+
+# selection is function that returns TRUE/FALSE for p-values<0.05
+selection <- function(x) TRUE
+
+allGO2genes <- annFUN.org(whichOnto="BP", feasibleGenes=NULL, mapping="org.Hs.eg.db", ID="symbol")
+
 GOdata <- new("topGOdata", ontology="BP", allGenes=list, annot=annFUN.GO2genes, GO2genes=allGO2genes, geneSel=selection, nodeSize=10)
 ```
 ## Perform Enrichment 
 
 ```{r}
 results.ks <- runTest(GOdata, algorithm="classic", statistic="ks")
-enrichment_barplot(GOdata, result = results.ks, showTerms = 10, numChar = 40, orderBy = "Scores", y = "Count",  xlab = NULL, ylab = NULL, title = "Turquoise Module GO Biological Process")
 ```
 # Turquoise Module Enrichment 
 ```{r}
@@ -384,9 +399,11 @@ showSigOfNodes(GOdata, score(results.ks), firstSigNodes = 5, useInfo = "all")
 
 
 ```{r}
+library(rrvgo)
 library(DOSE) #Disease ontology; description of gene product with disease perspectives
 library(pathview)
 library(clusterProfiler)
+library(ggplot2)
 #see what is negatively enriched in this
 ego <- enrichGO(gene = mod.paleturquoise_entrez$ENTREZID, 
                 universe = probes2annot$ENTREZID,
@@ -397,12 +414,52 @@ ego <- enrichGO(gene = mod.paleturquoise_entrez$ENTREZID,
                 qvalueCutoff = 0.05, 
                 readable = TRUE)
 cluster_BP_summary <- data.frame(ego)
-View(cluster_BP_summary)
-pdf(file='/home/clodagh/MASTERS PROJECT/GSE37614/GSE108565_paleturquoise_ORA_BP.pdf')
+#View(cluster_BP_summary)
+#png(file='/home/clodagh/MASTERS PROJECT/GSE37614/GSE108565_paleturquoise_ORA_BP.png')
 dotplot(ego, showCategory=10) + ggtitle("paleturquoise Module GO (Biological Process)")  +
   theme_classic()
 #dev.off()
+
+#write.csv(cluster_BP_summary, "/home/clodagh/MASTERS PROJECT/GSE37614/GSE108565_paleturquoise_GO_BP_table")
 ```
+
+## Revigo package to reduce redundancy in GO terms
+```{r}
+simMatrix <- calculateSimMatrix(cluster_BP_summary$ID,
+                                orgdb="org.Hs.eg.db",
+                                ont="BP",
+                                method="Rel")
+
+scores <- setNames(-log10(cluster_BP_summary$qvalue), cluster_BP_summary$ID)
+reducedTerms <- reduceSimMatrix(simMatrix,
+                                scores,
+                                threshold=0.7,
+                                orgdb="org.Hs.eg.db")
+library(tidyverse)
+reducedTerms <- reducedTerms %>% arrange(-score) %>% select(parentTerm, score, size)
+table(reducedTerms$parentTerm)
+heatmapPlot(simMatrix,
+            reducedTerms,
+            annotateParent=TRUE,
+            annotationLabel="parentTerm",
+            fontsize=6)
+```
+
+```{r}
+png("/home/clodagh/MASTERS PROJECT/GSE37614/GSE108565_GOterms_reduced.png")
+scatterPlot(simMatrix, reducedTerms)
+dev.off()
+
+table(reducedTerms$parent)
+```
+
+```{r}
+png("/home/clodagh/MASTERS PROJECT/GSE37614/GSE108565_GOterms_treemap.png")
+treemapPlot(reducedTerms)
+dev.off()
+```
+
+
 
 ```{r}
 ego <- enrichGO(gene = mod.paleturquoise_entrez$ENTREZID, 
@@ -450,6 +507,7 @@ ekegg <- enrichKEGG(gene = mod.paleturquoise_entrez$ENTREZID,
                 pAdjustMethod = "BH", 
                 universe = probes2annot$ENTREZID)
 cluster_KEGG_summary <- data.frame(ekegg)
+write.csv(cluster_KEGG_summary, "/home/clodagh/MASTERS PROJECT/GSE37614/GSE108565_paleturqoise_KEGG.csv")
 #View(cluster_KEGG_summary)
 #KeGG pathway looks very noisey
 pdf(file='/home/clodagh/MASTERS PROJECT/GSE37614/GSE108565_paleturqoise_ORA_KEGG.pdf')
@@ -462,7 +520,7 @@ dotplot(ekegg, showCategory=10, font.size = 8) + scale_y_discrete(labels = funct
 Overlap between DEGs and paleturquoise module
 ```{r}
 library(AnnotationDbi)
-sig_exprs <- read.csv("GSE108565_DEG_counts.csv", sep = "\t", row.names = 1)
+sig_exprs <- read.csv("GSE108565_DEG_counts.csv", sep = "\t", row.names = 1) #617 
 # get sig genes into same format as module genes
 DEGs <- AnnotationDbi::select(hs, 
        keys = rownames(sig_exprs),
@@ -478,7 +536,7 @@ library(VennDiagram)
 colours <- c('#FFC0CB', '#40E0D0')
 venn.diagram(x = list(DEGs$ENTREZID, mod.paleturquoise_entrez$ENTREZID),
              category.names = c('DEG\'s', 'Paleturquoise Module'),
-           filename = '/home/clodagh/MASTERS PROJECT/GSE37614/GSE108565_DGE_paleturquoise_Module_Overlap.png',
+           filename = '/home/clodagh/MASTERS PROJECT/GSE37614/GSE108565_DGE_0.5_paleturquoise_Module_Overlap.png',
              output = T,
              imagetype = 'png',
              scaled = F,
@@ -489,7 +547,7 @@ venn.diagram(x = list(DEGs$ENTREZID, mod.paleturquoise_entrez$ENTREZID),
 #display image
 options(repr.plot.height=12, repr.plot.width = 12)
 library('png')
-pp <- readPNG("/home/clodagh/MASTERS PROJECT/GSE37614/GSE108565_DGE_paleturquoise_Module_Overlap.png")
+pp <- readPNG("/home/clodagh/MASTERS PROJECT/GSE37614/GSE108565_DGE_0.5_paleturquoise_Module_Overlap.png")
 plot.new()
 rasterImage(pp, 0,0,1.1, 1.1)
 ```
@@ -500,18 +558,18 @@ Also look at enrichment for up and downregualted genes, assess if enrichment is 
 ```{r}
 #upregulated and downregulated genes from DEG analysis with DESeq2
 #using rownames 
-tT <- read.csv("/home/clodagh/MASTERS PROJECT/GSE37614/GSE108565_tT.txt", sep = "\t", row.names = 1)
+tT <- read.csv("/home/clodagh/MASTERS PROJECT/GSE37614/GSE108565_tT.txt", sep = ",", row.names = 1)
 
 # convert gene symbols to entrez id
-up_reg <- tT[tT$adj.P.Val <= 0.05 & tT$logFC >= 1, ];
+up_reg <- tT[tT$adj.P.Val <= 0.05 & tT$logFC >= 0.5, ];
 up_reg<- AnnotationDbi::select(hs, 
        keys = rownames(up_reg),
        columns = c("ENTREZID", "SYMBOL"),
        keytype = "SYMBOL")
-up_reg <- up_reg[-268,] #remove NA
+up_reg <- up_reg[-328,] #remove NA
 
 # convert gene symbols to entrez id
-down_reg <- tT[tT$adj.P.Val <= 0.05 & tT$logFC < -1, ];
+down_reg <- tT[tT$adj.P.Val <= 0.05 & tT$logFC < -0.5, ];
 down_reg <- AnnotationDbi::select(hs, 
        keys = rownames(down_reg),
        columns = c("ENTREZID", "SYMBOL"),
@@ -538,8 +596,8 @@ pval.modpaleturquoise # 2.188301e-285 VERY significantly enriched for up regulat
 #colours <- c('#CE2F17', '#E0FFFF', '#88D969', '#FFC0CB', '#40E0D0')
 colours <- c('#FFC0CB', '#40E0D0')
 venn.diagram(x = list(mod.paleturquoise_entrez$ENTREZID, up_reg$ENTREZID),
-             category.names = c('Upregulated DEG\'s', 'Paleturquoise Module'),
-             filename = '/home/clodagh/MASTERS PROJECT/GSE37614/Upregpaleturquoise_Module_Overlap.png',
+             category.names = c('Paleturquoise Module','Upregulated DEG\'s'),
+             filename = '/home/clodagh/MASTERS PROJECT/GSE37614/Upregpaleturquoise_Module_0.5_Overlap.png',
              output = T,
              main = '',
              sub = 'Overlap of DEG\'s and Paleturqoise Module',
@@ -559,14 +617,16 @@ venn.diagram(x = list(mod.paleturquoise_entrez$ENTREZID, up_reg$ENTREZID),
              margin = 0.15 )
 options(repr.plot.height=12, repr.plot.width = 12)
 library('png')
-pp <- readPNG('/home/clodagh/MASTERS PROJECT/GSE37614/Upregpaleturquoise_Module_Overlap.png')
+pp <- readPNG('/home/clodagh/MASTERS PROJECT/GSE37614/Upregpaleturquoise_Module_0.5_Overlap.png')
 plot.new()
 rasterImage(pp, 0,0,1.1, 1.1)
 ```
 
 ```{r}
 #use these to filter the modules filter paleturquoise module for export to cytoscape
-filter_paleturquoise <- intersect(up_reg$SYMBOL, mod.paleturquoise_entrez$SYMBOL)
+filter_paleturquoise <- intersect(DEGs$SYMBOL, mod.paleturquoise_entrez$SYMBOL)
+which(DEGs$SYMBOL == "IGFBP10")
+tT["CDKN2B",]
 ```
 # Export Network to Cytoscape
 
@@ -582,6 +642,7 @@ head(TOM[1:5,1:5])
 #Importing paleturquoise module
 
 ```{r}
+library(WGCNA)
 module = "paleturquoise"
 # Read in the annotation file
 annot <- AnnotationDbi::select(hs, 
@@ -600,17 +661,19 @@ modGenes = annot[inModule,]$ENTREZID;
 modTOM = TOM[inModule, inModule];
 dimnames(modTOM) = list(modGenes, modGenes)
 # Export the network into edge and node list files Cytoscape can read
+dim(modTOM)
 cyt = exportNetworkToCytoscape(modTOM,
-edgeFile = paste("CytoscapeInput-edges-", paste(module, collapse="-"), "TOM0.05.txt", sep=""),
-nodeFile = paste("CytoscapeInput-nodes-", paste(module, collapse="-"), "TOM0.05.txt", sep=""),
-threshold = 0.25,
+edgeFile = paste("CytoscapeInput-edges-", paste(module, collapse="-"), "TOM0.25.txt", sep=""),
+nodeFile = paste("CytoscapeInput-nodes-", paste(module, collapse="-"), "TOM0.25.txt", sep=""),
+threshold = 0.2,
 nodeNames = modProbes,
 altNodeNames = modGenes,
 nodeAttr = moduleColors[inModule]);
 
 weight <- head(cyt$edgeData[order(-cyt$edgeData$weight),], 0.1*nrow(cyt$edgeData))
-weight$fromNode
+write.csv(weight, "/home/clodagh/MASTERS PROJECT/GSE37614/pale_turquoise_edgedata_sortedbyweight.csv", row.names =T)
 ```
+
 
 ```{r}
 library(igraph)
@@ -650,4 +713,146 @@ top_central <- head(central[order(-central$BetweennessCentrality),],.10*nrow(cen
 
 central_genes <- rownames(top_central)
 ```
+
+
+
+Network of all DEGs
+
+```{r}
+library(WGCNA)
+DEGs <- read.csv("GSE108565_DEG_list.csv", sep = ",")
+DT::datatable(DEGs, options = list(scrollX = TRUE, pageLength = Inf, scroller = TRUE))
+DEG_list  <- DEGs$ID
+interferon_ti <- c("OAS3","C19orf66", "OASL", "SAMHD1","ISG20","STAT2","MX2","OAS2", "IFI6","IFNAR2", "XAF1", "IFIT3","IFIT2", "PSMB8","ISG15", "RSAD2", "IFI35")
+interferon_a_b <- c("OAS3","DHX58","OASL","SP110","RTP4","SAMHD1","PARP12","IFIH1","UBE2L6","DTX3L","ISG20","EPSTI1","TRIM25","SAMD9L","MX2","OAS2","IFI6","PARP9","XAF1","GBP5","IFI44","IFI44L","IFIT3","IFIT2","ISG15","RSAD2","DDX60","IFI35","PARP14","RNF213")
+
+int = is.finite(match(annot$SYMBOL, interferon_a_b)) #so this now filters the module by intersect
+#inModule
+#inModule = is.finite(match(moduleColors, modules));
+modProbes = annot[int,]$SYMBOL;
+modGenes = annot[int,]$ENTREZID;
+# Select the corresponding Topological Overlap
+modTOM <- TOM[int, int];
+dimnames(modTOM) = list(modGenes, modGenes)
+# Export the network into edge and node list files Cytoscape can read
+cyt_int = exportNetworkToCytoscape(modTOM,
+edgeFile = paste("Cytoscape-edges-", paste("Int", collapse="-"), ".txt", sep=""),
+nodeFile = paste("Cytoscape-nodes-", paste("Int", collapse="-"), ".txt", sep=""),
+threshold = 0.1,
+nodeNames = modProbes,
+altNodeNames = modGenes,
+nodeAttr = moduleColors[int]);
+```
+
+
+
+## Construct network of interferon alpha signalling and colour by logFC to see if enriched and co-expressed
+```{r}
+library(stringr)
+string <- read.csv("/home/clodagh/MASTERS PROJECT/GSE37614/pale_turquoise_STRING_clusters.csv")
+geen <- c("OAS3","DHX58","OASL","SP110","RTP4","PARP12","IFIH1","UBE2L6","DTX3L","ISG20","EPSTI1","TRIM25","SAMD9L","MX2","OAS2","IFI6","PARP9","XAF1","IFI44","IFI44L","IFIT3","IFIT2","ISG15","RSAD2","DDX60","IFI35","PARP14","RNF213")
+
+# extract TOM for above genes and construct network
+DE = is.finite(match(annot$SYMBOL, geen)) 
+DE <- which(DE)
+#so this now filters the module by intersect
+#inModule
+#inModule = is.finite(match(moduleColors, modules));
+modProbes = annot[DE,]$SYMBOL;
+modGenes = annot[DE,]$ENTREZID;
+# Select the corresponding Topological Overlap
+modTOM = TOM[DE, DE];
+dim(modTOM)
+dimnames(modTOM) = list(modProbes, modProbes)
+# Export the network into edge and node list files Cytoscape can read
+cyt = exportNetworkToCytoscape(modTOM,
+edgeFile = paste("Cytoscape-edges-", paste("Inf_alpha", collapse="-"), ".txt", sep=""),
+nodeFile = paste("Cytoscape-nodes-", paste("Inf_alpha", collapse="-"), ".txt", sep=""),
+threshold = 0.01,
+nodeNames = modProbes,
+altNodeNames = modGenes,
+nodeAttr = moduleColors[DE]);
+```
+
+
+# Import analysed network and info on top 20 hub genes
+```{r}
+hub <- read.csv("/home/clodagh/MASTERS PROJECT/GSE37614/pale_turquoise_degree_infocsv.csv")
+hub <- hub[, c("name", "degree.layout", "logFC" )]
+hub <- hub[order(-hub[,3]),]
+hub <- hub[1:20,]
+colnames(hub) <- c("Gene", "Degree", "Log2FC")
+write.csv(hub, "/home/clodagh/MASTERS PROJECT/GSE37614/GSE108565_hubtop20.csv", row.names = F)
+```
+
+# Heatmap of hub genes
+```{r}
+library(pheatmap)
+labs <- c(rep("resistent", 7), rep("sensitive", 7))
+hub_exprs <- qnorm[rownames(qnorm) %in% hub$Gene, ]
+pheatmap(hub_exprs, trace="none", scale="row", cexRow=0.2, cexCol=0.7, annotation_col = annotation_for_heatmap, show_rownames = T, cluster_cols = T, labels_col = labs, main = "Heatmap of top 20 hub genes")
+#dev.off()
+```
+
+
+
+
+# Survival Analysis
+```{r}
+library(TCGAbiolinks)
+
+GDCprojects <- getGDCprojects()
+head(GDCprojects[c("project_id","name")])
+
+TCGAbiolinks::getProjectSummary("TCGA-BRCA")
+
+query_TCGA = GDCquery(project = "TCGA-BRCA",
+                      data.category = "Transcriptome Profiling",
+                      experimental.strategy = "RNA-Seq",
+                      workflow.type = "STAR - Counts",
+                      sample.type = c("Primary Tumor", "Solid Tissue Normal"))
+
+brca_res <- getResults(query_TCGA)
+colnames(brca_res)
+summary(brca_res$sample_type)
+brca_res$sample_type <- as.factor(brca_res$sample_type)
+summary(brca_res$data_type)
+
+
+
+library(TCGAbiolinks)
+# Survival Analysis SA
+
+clinical_patient_Cancer <- GDCquery_clinic("TCGA-BRCA","clinical")
+dataBRCAcomplete <- log2(BRCA_rnaseqv2)
+
+tokenStop <- 1
+
+tabSurvKMcomplete <- NULL
+
+for( i in 1: round(nrow(dataBRCAcomplete)/100)){
+    message( paste( i, "of ", round(nrow(dataBRCAcomplete)/100)))
+    tokenStart <- tokenStop
+    tokenStop <- 100 * i
+    tabSurvKM <- TCGAanalyze_SurvivalKM(
+        clinical_patient_Cancer,
+        dataBRCAcomplete,
+        Genelist = rownames(dataBRCAcomplete)[tokenStart:tokenStop],
+        Survresult = F,
+        ThreshTop = 0.67,
+        ThreshDown = 0.33
+    )
+    
+    tabSurvKMcomplete <- rbind(tabSurvKMcomplete,tabSurvKM)
+}
+
+tabSurvKMcomplete <- tabSurvKMcomplete[tabSurvKMcomplete$pvalue < 0.01,]
+tabSurvKMcomplete <- tabSurvKMcomplete[order(tabSurvKMcomplete$pvalue, decreasing=F),]
+
+tabSurvKMcompleteDEGs <- tabSurvKMcomplete[
+    rownames(tabSurvKMcomplete) %in% dataDEGsFiltLevel$mRNA,
+]
+```
+
+
 

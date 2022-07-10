@@ -22,19 +22,30 @@ library(genefilter)
 library(stringr)
 ```
 
-# Reduce dataset - remove low variance genes
+# Read in expression data and sample traits 
+# Remove batch effects
 ```{r}
-# read in quantile normalized log2 data with batch effects removed
-rm_batch <- read.csv("/home/clodagh/MASTERS PROJECT/GSE37614/GSE37614_rm_batch_.txt", header = T, sep= "\t")
+qnorm <- read.csv("/home/clodagh/MASTERS PROJECT/GSE37614/GSE37614_qnorm.csv", row.names=1)
+meta <- read.csv("/home/clodagh/MASTERS PROJECT/GSE37614/metadata.csv", sep = "\t")
+groups <- as.factor(meta$Cancer_Subtype)
+gps <- c("ER", "HER", "TNBC")
+design <- model.matrix(~0 + groups)
+colnames(design) <- gps
+#rm_batch <- limma::removeBatchEffect(log2(qnorm + 1), batch = meta$Batch, design=design)
+
+rm_batch <- read.csv("/home/clodagh/MASTERS PROJECT/GSE37614/GSE37614_rm_batch_.txt", sep ="\t")
+```
+
+# Remove low variance genes
+```{r}
 rm_batch <- as.matrix(rm_batch)
 rm_batch <- varFilter(rm_batch, var.cutoff = 0.5) #filter threshold top 30% of most variable genes 
-dim(rm_batch) # 7477 genes
+dim(rm_batch) # 7447 genes
 ```
 
 ```{r}
 #rows as samples, columns as genes
 datExpr <- as.data.frame(t(rm_batch))
-#datExpr=datExpr[, rank(-k,ties.method="first" )<=3600]
 #write.csv(datExpr, file = '/home/clodagh/MASTERS PROJECT/GSE37614/datExpr.csv', row.names = T)
 
 ## Step by step WGCN construction
@@ -60,7 +71,6 @@ abline(h = 55, col = "red")
 ```
 # Make metadata with matching colnames
 ```{r}
-meta <- read.csv("/home/clodagh/MASTERS PROJECT/GSE37614/metadata.csv", sep = "\t")
 samps = rownames(datExpr);
 traitRows = match(samps, rownames(meta))
 datTraits = meta[traitRows, ]
@@ -88,7 +98,7 @@ Network Construction; selecting a similarity metric
 
 ```{r}
 powers= c(c(1:10), seq(from =12, to=30, by=2)) #choosing a set of soft-thresholding powers
-sft = pickSoftThreshold(datExpr, powerVector=powers, dataIsExpr = T, networkType = "signed", verbose =2) #call network topology analysis function
+sft = pickSoftThreshold(datExpr, powerVector=powers, dataIsExpr = T, networkType = "signed hybrid", verbose =2) #call network topology analysis function
 ```
 
 ```{r}
@@ -108,15 +118,14 @@ text(sft$fitIndices[,1], sft$fitIndices[,5], labels=powers, cex=cex1, col="red")
 
 # Adjacency - check scale freeness
 ```{r}
-softpower = 24
+softpower = 16
 #plot adj in next section
-adj= adjacency(datExpr,type = "signed", power = softpower)
 #head(adj[1:5,1:5])
 # corFnc defaults to Pearson 
 # When you have relatively few genes (<5000) use the following code
 #k=as.vector(apply(adj,2,sum, na.rm=T))
 # When you have a lot of genes use the following code
-k=softConnectivity(datE=datExpr, power=softpower, type = "signed")
+k=softConnectivity(datE=datExpr, power=softpower, type = "signed hybrid")
 # Plot a histogram of k and a scale free topology plot
 sizeGrWindow(10,5)
 par(mfrow=c(1,2))
@@ -124,6 +133,8 @@ hist(k)
 # Relatiely scale free - Poor fit to scale free topology may also indicate
 # the presence of array outliers. Might remove the Her2+ER+ sample?
 scaleFreePlot(k, main="Check scale free topology\n")
+
+adj= adjacency(datExpr,type = "signed hybrid", power = softpower)
 ```
 
 
@@ -134,13 +145,13 @@ scaleFreePlot(k, main="Check scale free topology\n")
 # idea of TOM is to count the direct connection strengths as well as connection strengths “mediated” by shared neighbors
 # signed network: preserves the sign of the relationship between the nodes while taking account the connections through shared neighbors in the same way the standard unsigned TOM does.
 
-dissTOM <- TOMdist(adj)
-#dissTOM <- read.csv('/home/clodagh/MASTERS PROJECT/GSE37614/GSE37614_dissTOM.txt')
+#dissTOM <- TOMdist(adj)
+
 #save TOM 
 #write.table(dissTOM, file = '/home/clodagh/MASTERS PROJECT/GSE37614/GSE37614_dissTOM.txt', sep ='\t', col.names = T, row.names = T)
 #take the distance of the TOM matrix
+dissTOM <- read.csv('/home/clodagh/MASTERS PROJECT/GSE37614/GSE37614_dissTOM.txt', sep ="\t")
 head(dissTOM[1:5,1:5])
-
 ```
 
 Plot the adjacency matrix
@@ -241,7 +252,7 @@ MEDiss = 1-cor(MEs);
 # Cluster module eigengenes
 METree = hclust(as.dist(MEDiss), method = "average");
 # Plot the result
-MEDissThres = 0.30 #correlation of 75% to merge. 
+MEDissThres = 0.2 #correlation of 75% to merge. 
 sizeGrWindow(7, 6)
 #pdf(file = '/home/clodagh/MASTERS PROJECT/GSE37614/module_eigengene_clustering.pdf', wi = 9, he = 6)
 plot(METree, main = "Clustering of module eigengenes",
@@ -251,7 +262,7 @@ abline(h=MEDissThres, col = "red")
 ```
 
 ```{r}
-# Call an automatic merging function; merge modules with eigengenes similarity >75%
+# Call an automatic merging function; merge modules with eigengenes similarity >80%
 merge = mergeCloseModules(datExpr, dynamicColors, cutHeight = MEDissThres, verbose = 3)
 # The merged module colors
 mergedColors = merge$colors;
@@ -261,12 +272,12 @@ table(mergedColors)
 #plot shows the orignal module definition by dynamic tree cut and then the merging of modules via correlation in eigengene values
 sizeGrWindow(12, 9)
 #
-#pdf(file = '/home/clodagh/MASTERS PROJECT/GSE37614/Cluster_dend(pears22,eign_thresh=.25).pdf', wi = 9, he = 6)
+png( '/home/clodagh/MASTERS PROJECT/GSE37614/Cluster_dend(pears16,eign_thresh=.2).png', width = 5, height = 3.5, units = "in", res= 600)
 plotDendroAndColors(geneTree, cbind(dynamicColors, mergedColors),
 c("Dynamic Tree Cut", "Merged dynamic"),
 dendroLabels = FALSE, hang = 0.03,
 addGuide = TRUE, guideHang = 0.05)
-#dev.off()
+dev.off()
 ```
 
 
@@ -320,6 +331,7 @@ moduleColors = mergedColors
 colorOrder = c("grey", standardColors(50));
 moduleLabels = match(moduleColors, colorOrder)-1;
 MEs = mergedMEs
+table(moduleColors)
 # Save module colors and labels for use in subsequent parts
 #save(MEs, moduleLabels, moduleColors, geneTree, file = "/home/clodagh/MASTERS PROJECT/GSE37614/network_construction.RData")
 ```
@@ -350,14 +362,13 @@ dim(moduleTraitCor)
 
 
 sizeGrWindow(12,6)
-#pdf(file = '/home/clodagh/MASTERS PROJECT/GSE37614/MTR_plot.pdf')
+
 # Will display correlations and their p-values
 textMatrix = paste(signif(moduleTraitCor, 2), "\n(",
 signif(moduleTraitPvalue, 1), ")", sep = "");
 dim(textMatrix) = dim(moduleTraitCor)
-par(mar = c(10, 10, 5, 5));
 
-
+#png(file = '/home/clodagh/MASTERS PROJECT/GSE37614/GSE37614_MTR_plot.png', width = 6, height = 6, units = "in", res =600)
 # Display the correlation values within a heatmap plot
 labeledHeatmap(Matrix = moduleTraitCor,
 xLabels = names(datTraits),
@@ -366,7 +377,7 @@ ySymbols = names(MEs),
 colorLabels = FALSE,
 colors = blueWhiteRed(50),
 textMatrix = textMatrix,
-setStdMargins = FALSE,
+setStdMargins = TRUE,
 cex.text = 0.5,
 zlim = c(-1,1),
 main = paste("Module-trait relationships"))
@@ -412,10 +423,10 @@ GeneSignificance=abs(GS2)
 # Next module significance is defined as average gene significance.
 ModuleSignificance=tapply(GeneSignificance, moduleColors, mean, na.rm=T)
 sizeGrWindow(12,6)
-#pdf(file = '/home/clodagh/MASTERS PROJECT/GSE37614/gene_sig_barplot.pdf')
+png(file = '/home/clodagh/MASTERS PROJECT/GSE37614/gene_sig_barplot.png')
 plotModuleSignificance(GeneSignificance, moduleColors) #could also use this to define pathway membership etc.
 ModuleSignificance
-#dev.off()
+dev.off()
 ```
 
 
@@ -425,11 +436,11 @@ MS_order <- sort(ModuleSignificance)
 # calculate the module membership values (aka. module eigengene based connectivity kME)
 datKME <- signedKME(datExpr, MEs )
 datKME #ie how correlated, anticorrelated genes are with module eigengenes
-#pdf(file = '/home/clodagh/MASTERS PROJECT/GSE37614/GSvsMMplot.pdf')
+#png(file = '/home/clodagh/MASTERS PROJECT/GSE37614/GSvsMMplot.png')
 colorOfColumn = substring(names(MEs), 3)
 colorOfColumn
 par(mfrow = c(2, 2))
-selectModules = c("floralwhite", "darkgreen")
+selectModules = c("brown", "greenyellow")
 #par(mfrow = c(2, length(selectModules)/2))
 for (module in selectModules) {
     column = match(module, colorOfColumn)
@@ -439,7 +450,7 @@ for (module in selectModules) {
         module, "module"), ylab = "GS.HER2", main = paste("kME.", module, 
         "vs. GS"), col = module,  bty="n" , abline = T, pch = 16 , cex = 1, cex.axis = 1, cex.main = 1)
 }
-dev.off()
+#dev.off()
 ```
 
 
@@ -458,7 +469,7 @@ MS_order
 #relationship between gene significance in a intramodular connectivity
 #pdf(file = '/home/clodagh/MASTERS PROJECT/GSE37614/GSvsIntraModConnect.pdf')
 colorlevels=unique(moduleColors)
-rm_colorlevels = c("orangered4","cyan", "lightyellow", "turquoise", "blue", "brown", "yellow", "green")
+rm_colorlevels = c("yellow", "blue", "red", "midnightblue", "turquoise",  "grey", "cyan", "black", "royalblue", "darkgreen",  "lightyellow")
 colorlevels <- colorlevels[! colorlevels %in% rm_colorlevels]
 colorlevels
 #sizeGrWindow(9,6)
@@ -474,18 +485,18 @@ GeneSignificance[restrict1], col=moduleColors[restrict1],
 main=whichmodule,
 xlab = "Connectivity", ylab = "Gene Significance", abline = TRUE, cex.lab = 1, cex = 1, pch = 16, cex.main = 1)
 }
-#can see that the orangered4, pink, darkgreen and salmon hub genes (high connectivity) tend to have high gene significance (correlation with the trait)
+#can see that the orangered4, pink, cyan and salmon hub genes (high connectivity) tend to have high gene significance (correlation with the trait)
 #this shows how well connected each gene is within the module
 #want genes highly connected with high trait significance
-dev.off()
+#dev.off()
 ```
 
 Write out results for genes with their module membership values
 
 ```{r}
 # modules of interest for HER2
-names(datExpr)[moduleColors=="floralwhite"] # 793 genes pos association
-names(datExpr)[moduleColors== "darkgreen"] # 532 genes neg association
+names(datExpr)[moduleColors=="brown"] #428 genes neg association
+names(datExpr)[moduleColors== "greenyellow"] # 154 genes pos association
 #names(datExpr)[moduleColors== "violet"] 
 #create geneinfo dataframe
 geneInfo0 <- data.frame(Entrez_ID = names(datExpr), 
@@ -506,7 +517,7 @@ paste("p.MM.", modNames[modOrder[mod]], sep=""))
 geneOrder = order(geneInfo0$module_Colour, -abs(geneInfo0$GS.HER2));
 geneInfo = geneInfo0[geneOrder, ]
 #write df to file:
-#write.csv(geneInfo, file = "/home/clodagh/MASTERS PROJECT/GSE37614/geneInfo.csv", row.names = F)
+write.csv(geneInfo, file = "/home/clodagh/MASTERS PROJECT/GSE37614/geneInfo.csv", row.names = F)
 ```
 
 
@@ -515,11 +526,12 @@ geneInfo = geneInfo0[geneOrder, ]
 Genes highly significantly associated with a trait are often also the most important (central) elements of modules associated with the trait
 
 ```{r}
-module = "floralwhite"
+module = "brown"
 column = match(module, modNames);
 moduleGenes = moduleColors==module;
 sizeGrWindow(7, 7);
 par(mfrow = c(1,1));
+png
 verboseScatterplot(abs(geneModuleMembership[moduleGenes, column]),
 abs(geneTraitSignificance[moduleGenes, 1]),
 xlab = paste("Module Membership in", module, "module"),
@@ -530,7 +542,7 @@ cex.main = 1.2, cex.lab = 1.2, cex.axis = 1.2, col = module)
 
 
 ```{r}
-module = "darkgreen"
+module = "greenyellow"
 column = match(module, modNames);
 moduleGenes = moduleColors==module;
 sizeGrWindow(7, 7);
@@ -577,32 +589,32 @@ sum(is.na(probes2annot))
 # Module Enrichment Analysis 
 ```{r}
 # modules of interest for HER2
-mod.floralwhite <- names(datExpr)[moduleColors=="floralwhite"] # 278 genes negative association
-mod.darkgreen<- names(datExpr)[moduleColors== "darkgreen"]# 631 genes pos association
-#mod.darkgreen<- names(datExpr)[moduleColors== "darkgreen"] # 608 genes pos association
+mod.brown <- names(datExpr)[moduleColors=="brown"] # 278 genes negative association
+mod.greenyellow<- names(datExpr)[moduleColors== "greenyellow"]# 631 genes pos association
+#mod.cyan<- names(datExpr)[moduleColors== "cyan"] # 608 genes pos association
 ```
 
 
 ```{r}
-mod.floralwhite_entrez <- AnnotationDbi::select(hs, 
-       keys = mod.floralwhite,
+mod.brown_entrez <- AnnotationDbi::select(hs, 
+       keys = mod.brown,
        columns = c("ENTREZID", "SYMBOL"),
        keytype = "SYMBOL")
 
-mod.darkgreen_entrez <- AnnotationDbi::select(hs, 
-       keys = mod.darkgreen,
+mod.greenyellow_entrez <- AnnotationDbi::select(hs, 
+       keys = mod.greenyellow,
        columns = c("ENTREZID", "SYMBOL"),
        keytype = "SYMBOL")
 ```
 
-# floralwhite module Enrichment 
+# brown module Enrichment 
 
 #overall impression; genes in the module seem to be significantly enriched in fundamental processes like chromosomal rearrangement, replication, transcription, translation etc. If these processes are downregulated in miRNA overexpressing cells, may suggest why the cells are growing slower
 
 ```{r}
 library(clusterProfiler)
-#try floralwhite first as neg enriched in HER2 status
-ego <- enrichGO(gene = mod.floralwhite_entrez$ENTREZID, 
+#try brown first as neg enriched in HER2 status
+ego <- enrichGO(gene = mod.brown_entrez$ENTREZID, 
                 universe =probes2annot$ENTREZID,
                 keyType = "ENTREZID",
                 OrgDb = org.Hs.eg.db, 
@@ -612,12 +624,15 @@ ego <- enrichGO(gene = mod.floralwhite_entrez$ENTREZID,
                 readable = TRUE)
 cluster_BP_summary <- data.frame(ego)
 View(cluster_BP_summary)
-pdf(file='/home/clodagh/MASTERS PROJECT/GSE37614/Enrichment_Analysis/floralwhite_ORA_BP.pdf')
-dotplot(ego, showCategory=10) + ggtitle("floralwhite Module GO (Biological Process)")  +
+write.csv(cluster_BP_summary, '/home/clodagh/MASTERS PROJECT/GSE37614/brown_ORA_BP.csv')
+#png("/home/clodagh/MASTERS PROJECT/GSE37614/brown_module_GO_BP.png", width =6, height =6, units = "in", res = 500)
+dotplot(ego, showCategory=10) + ggtitle("Brown Module GO (Biological Process)")  +
   theme_classic()
-dev.off()
+#dev.off()
+```
 
-ego <- enrichGO(gene = mod.floralwhite_entrez$ENTREZID, 
+```{r}
+ego <- enrichGO(gene = mod.brown_entrez$ENTREZID, 
                 universe = probes2annot$ENTREZID,
                 keyType = "ENTREZID",
                 OrgDb = org.Hs.eg.db, 
@@ -627,12 +642,16 @@ ego <- enrichGO(gene = mod.floralwhite_entrez$ENTREZID,
                 readable = TRUE)
 cluster_CC_summary <- data.frame(ego)
 View(cluster_CC_summary)
-#can see a llot of terms associated with chromosomal rearrangement
-#pdf(file='/home/clodagh/MASTERS PROJECT/GSE37614/Enrichment_Analysis/darkgreen_ORA_CC.pdf')
-dotplot(ego, showCategory=10) + ggtitle("floralwhite Module GO (Cellular Component)")  +
+write.csv(cluster_CC_summary, '/home/clodagh/MASTERS PROJECT/GSE37614/brown_ORA_CC.csv')
+png("/home/clodagh/MASTERS PROJECT/GSE37614/brown_module_GO_CC.png", width =6, height =6, units = "in", res = 500)
+#pdf(file='/home/clodagh/MASTERS PROJECT/GSE37614/Enrichment_Analysis/cyan_ORA_CC.pdf')
+dotplot(ego, showCategory=10) + ggtitle("Brown Module GO (Cellular Component)")  +
   theme_classic()
 dev.off()
-ego <- enrichGO(gene = mod.floralwhite_entrez$ENTREZID, 
+
+```
+```{r}
+ego <- enrichGO(gene = mod.brown_entrez$ENTREZID, 
                 universe = probes2annot$ENTREZID,
                 keyType = "ENTREZID",
                 OrgDb = org.Hs.eg.db, 
@@ -642,80 +661,16 @@ ego <- enrichGO(gene = mod.floralwhite_entrez$ENTREZID,
                 readable = TRUE)
 cluster_MF_summary <- data.frame(ego)
 View(cluster_MF_summary)
-pdf(file='/Users/martingordon/Documents/MSC_project/data/new_WGCNA/Enrichment_Analysis/floralwhite_ORA_MP.pdf')
-dotplot(ego, showCategory=10) + ggtitle("floralwhite Module GO (Molecular Function)")  +
-  theme_classic()
-dev.off()
-
-#KEGG Pathway Enrichment Analysis
-ekegg <- enrichKEGG(gene = mod.floralwhite_entrez$ENTREZID, 
-                organism = "hsa",
-                keyType = 'kegg',
-                #keyType = "ENTREZID",
-                qvalueCutoff = 0.05, 
-                pAdjustMethod = "BH", 
-                universe = gene_names$ENTREZID)
-cluster_KEGG_summary <- data.frame(ekegg)
-View(cluster_KEGG_summary)
-#KeGG pathway looks very noisey
-#pdf(file='/Users/martingordon/Documents/MSC_project/data/new_WGCNA/Enrichment_Analysis/floralwhite_ORA_KEGG.pdf')
-dotplot(ekegg, showCategory=10) + ggtitle("floralwhite Module GO (Molecular Function)")  +
+#write.csv(cluster_MF_summary, '/home/clodagh/MASTERS PROJECT/GSE37614/brown_ORA_MF.csv')
+#png("/home/clodagh/MASTERS PROJECT/GSE37614/brown_module_GO_MF.png", width =6, height =6, units = "in", res = 500)
+dotplot(ego, showCategory=10) + ggtitle("Brown Module GO (Molecular Function)")  +
   theme_classic()
 dev.off()
 ```
 
-
-darkgreen module
-
 ```{r}
-#try darkgreen first as negatively enriched in miR overexp
-#see what is negatively enriched in this
-ego <- enrichGO(gene = mod.darkgreen_entrez$ENTREZID, 
-                universe = probes2annot$ENTREZID,
-                keyType = "ENTREZID",
-                OrgDb = org.Hs.eg.db, 
-                ont = "BP", #Biological Processes GO term, also done for CC and MF
-                pAdjustMethod = "BH", 
-                qvalueCutoff = 0.05, 
-                readable = TRUE)
-cluster_BP_summary <- data.frame(ego)
-View(cluster_BP_summary)
-pdf(file='/home/clodagh/MASTERS PROJECT/GSE37614/Enrichment_Analysis/darkgreen_ORA_BP.pdf')
-dotplot(ego, showCategory=10, font.size = 8) + scale_y_discrete(labels = function(x) str_wrap(x, width = 20)) + ggtitle("darkgreen Module GO (Biological Process)")  + 
-  theme_classic() 
-dev.off()
-ego <- enrichGO(gene = mod.darkgreen_entrez$ENTREZID, 
-                universe = probes2annot$ENTREZID,
-                keyType = "ENTREZID",
-                OrgDb = org.Hs.eg.db, 
-                ont = "CC", #Biological Processes GO term, also done for CC and MF
-                pAdjustMethod = "BH", 
-                qvalueCutoff = 0.05, 
-                readable = TRUE)
-cluster_CC_summary <- data.frame(ego)
-View(cluster_CC_summary)
-#can see a llot of terms associated with chromosomal rearrangement
-pdf(file='/home/clodagh/MASTERS PROJECT/GSE37614/Enrichment_Analysis/darkgreen_ORA_CC.pdf')
-dotplot(ego, showCategory=10, font.size = 8) + scale_y_discrete(labels = function(x) str_wrap(x, width = 20)) + ggtitle("darkgreen Module GO (Cellular Compartment)")  + 
-  theme_classic() 
-dev.off()
-ego <- enrichGO(gene = mod.darkgreen_entrez$ENTREZID, 
-                universe = probes2annot$ENTREZID,
-                keyType = "ENTREZID",
-                OrgDb = org.Hs.eg.db, 
-                ont = "MF", #Biological Processes GO term, also done for CC and MF
-                pAdjustMethod = "BH", 
-                qvalueCutoff = 0.05, 
-                readable = TRUE)
-cluster_MF_summary <- data.frame(ego)
-View(cluster_MF_summary)
-pdf(file='/home/clodagh/MASTERS PROJECT/GSE37614/Enrichment_Analysis/darkgreen_ORA_MF.pdf')
-dotplot(ego, showCategory=10, font.size = 8) + scale_y_discrete(labels = function(x) str_wrap(x, width = 20)) +
-  ggtitle("darkgreen Module GO (Molecular Function)")  + 
-  theme_classic() 
-dev.off()
 #KEGG Pathway Enrichment Analysis
-ekegg <- enrichKEGG(gene = mod.darkgreen_entrez$ENTREZID, 
+ekegg <- enrichKEGG(gene = mod.brown_entrez$ENTREZID, 
                 organism = "hsa",
                 keyType = 'kegg',
            #     keyType = "ENTREZID",
@@ -725,26 +680,87 @@ ekegg <- enrichKEGG(gene = mod.darkgreen_entrez$ENTREZID,
 cluster_KEGG_summary <- data.frame(ekegg)
 View(cluster_KEGG_summary)
 #KeGG pathway looks very noisey
-pdf(file='/home/clodagh/MASTERS PROJECT/GSE37614/Enrichment_Analysis/darkgreen_ORA_KEGG.pdf')
-dotplot(ekegg, showCategory=10) + ggtitle("darkgreen Module GO (Molecular Function)")  +
+write.csv(cluster_KEGG_summary, '/home/clodagh/MASTERS PROJECT/GSE37614/brown_ORA_KEGG.csv')
+png("/home/clodagh/MASTERS PROJECT/GSE37614/brown_module_GO_KEGG.png", width =6, height =6, units = "in", res = 500)
+dotplot(ekegg, showCategory=10) + ggtitle("Brown Module GO (KEGG)")  +
   theme_classic()
 dev.off()
 ```
 
 
-Overlap of modules and DGE's
-#Can see from plot that many of the differentially expressed genes are located in the floralwhite and turquoise modules, as floralwhite module has ~ 750 genes and locates ~250 of the DGE's seems like an interesting module to investigate.. Over 1/3 of these modules genes are located in the DGE list
+# greenyellow module
+## NOTHING TO SEE HERE 
+```{r}
+#try greenyellow first as negatively enriched in miR overexp
+#see what is negatively enriched in this
+ego <- enrichGO(gene = mod.greenyellow_entrez$ENTREZID, 
+                universe = probes2annot$ENTREZID,
+                keyType = "ENTREZID",
+                OrgDb = org.Hs.eg.db, 
+                ont = "BP", #Biological Processes GO term, also done for CC and MF
+                pAdjustMethod = "BH", 
+                qvalueCutoff = 0.05, 
+                readable = TRUE)
+cluster_BP_summary <- data.frame(ego)
+View(cluster_BP_summary)
+#pdf(file='/home/clodagh/MASTERS PROJECT/GSE37614/Enrichment_Analysis/greenyellow_ORA_BP.pdf')
+dotplot(ego, showCategory=10, font.size = 8) + scale_y_discrete(labels = function(x) str_wrap(x, width = 20)) + ggtitle("greenyellow Module GO (Biological Process)")  + 
+  theme_classic() 
+dev.off()
+```
 
 ```{r}
-#list of gene names 
+ego <- enrichGO(gene = mod.greenyellow_entrez$ENTREZID, 
+                universe = probes2annot$ENTREZID,
+                keyType = "ENTREZID",
+                OrgDb = org.Hs.eg.db, 
+                ont = "CC", #Biological Processes GO term, also done for CC and MF
+                pAdjustMethod = "BH", 
+                qvalueCutoff = 0.05, 
+                readable = TRUE)
+cluster_CC_summary <- data.frame(ego)
+View(cluster_CC_summary)
+#can see a llot of terms associated with chromosomal rearrangement
+pdf(file='/home/clodagh/MASTERS PROJECT/GSE37614/Enrichment_Analysis/greenyellow_ORA_CC.pdf')
+dotplot(ego, showCategory=10, font.size = 8) + scale_y_discrete(labels = function(x) str_wrap(x, width = 20)) + ggtitle("greenyellow Module GO (Cellular Compartment)")  + theme_classic() 
+dev.off()
+
+```
+
+```{r}
+ego <- enrichGO(gene = mod.greenyellow_entrez$ENTREZID, 
+                universe = probes2annot$ENTREZID,
+                keyType = "ENTREZID",
+                OrgDb = org.Hs.eg.db, 
+                ont = "MF", #Biological Processes GO term, also done for CC and MF
+                pAdjustMethod = "BH", 
+                qvalueCutoff = 0.05, 
+                readable = TRUE)
+cluster_MF_summary <- data.frame(ego)
+View(cluster_MF_summary)
+pdf(file='/home/clodagh/MASTERS PROJECT/GSE37614/Enrichment_Analysis/greenyellow_ORA_MF.pdf')
+dotplot(ego, showCategory=10, font.size = 8) + scale_y_discrete(labels = function(x) str_wrap(x, width = 20)) +
+  ggtitle("greenyellow Module GO (Molecular Function)")  + 
+  theme_classic() 
+dev.off()
+```
+
+
+
+
+Overlap of modules and DGE's
+#Can see from plot that many of the differentially expressed genes are located in the brown and turquoise modules, as brown module has ~ 750 genes and locates ~250 of the DGE's seems like an interesting module to investigate.. Over 1/3 of these modules genes are located in the DGE list
+
+```{r}
+#list of gene names fc > 0.5
 de_gene <- DEG_entrez$ENTREZID
 # now in same format as the module genes. look at intersection
-mod.darkgreen_entrez <- mod.darkgreen_entrez[-92,]
+mod.brown_entrez <- mod.greenyellow_entrez[-35,]
 #Use the Venn Diagram package in R
 library(VennDiagram)
 colours <- c('#CE2F17', '#88D969', 'blue')
-venn.diagram(x = list(de_gene, mod.floralwhite_entrez$ENTREZID, mod.darkgreen_entrez$ENTREZID),
-             category.names = c('DEG\'s', 'floralwhite Module', 'darkgreen Module'),
+venn.diagram(x = list(de_gene, mod.brown_entrez$ENTREZID, mod.greenyellow_entrez$ENTREZID),
+             category.names = c('DEG\'s', 'brown Module', 'greenyellow Module'),
              filename = '/home/clodagh/MASTERS PROJECT/GSE37614/Enrichment_Analysis/DGE_Module_Overlap.png',
              output = T,
              imagetype = 'png',
@@ -763,21 +779,29 @@ rasterImage(pp, 0,0,1.1, 1.1)
 ```
 
 
+
+```{r}
+#use these to filter the modules filter paleturquoise module for export to cytoscape
+filter_brown <- intersect(DEG_entrez$SYMBOL, mod.brown)
+```
+
+
+
+
 # Export Network to Cytoscape
 
 From tutorial
 ```{r}
 # Recalculate topological overlap if needed
-TOM = TOMsimilarityFromExpr(datExpr, power = 24 , corType = "bicor", networkType = "signed");
+TOM = TOMsimilarityFromExpr(datExpr, power = 16, networkType = "signed hybrid");
 head(TOM[1:5,1:5])
 ```
-
 
 #Importing paleturquoise module
 
 ```{r}
 dim(TOM)
-modules <- "floralwhite"
+modules <- "brown"
 # Read in the annotation file
 annot <- AnnotationDbi::select(hs, 
        keys = colnames(datExpr),
@@ -786,7 +810,7 @@ annot <- AnnotationDbi::select(hs,
 #remove duplicates
 annot <- distinct(annot, SYMBOL, .keep_all = T)
 # Select modules
-inModule= is.finite(match(annot$SYMBOL, mod.floralwhite)) #so this now filters the module by intersect
+inModule= is.finite(match(annot$SYMBOL,filter_brown)) #so this now filters the module by intersect
 #inModule
 #inModule = is.finite(match(moduleColors, modules));
 modProbes = annot[inModule,]$SYMBOL;
@@ -795,18 +819,18 @@ modGenes = annot[inModule,]$ENTREZID;
 modTOM = TOM[inModule, inModule];
 dimnames(modTOM) = list(modGenes, modGenes)
 # Export the network into edge and node list files Cytoscape can read
-cyt_floralwhite = exportNetworkToCytoscape(modTOM,
+cyt_brown = exportNetworkToCytoscape(modTOM,
 edgeFile = paste("GSE37614_CytoscapeInput-edges-", paste(modules, collapse="-"), ".txt", sep=""),
 nodeFile = paste("GSE37614_CytoscapeInput-nodes-", paste(modules, collapse="-"), ".txt", sep=""),
-threshold = 0.1,
+threshold = 0.05,
 nodeNames = modProbes,
 altNodeNames = modGenes,
 nodeAttr = moduleColors[inModule]);
 ```
 
 ```{r}
-modules = "darkgreen"
-inModule= is.finite(match(annot$SYMBOL, mod.darkgreen)) #so this now filters the module by intersect
+modules = "greenyellow"
+inModule= is.finite(match(annot$SYMBOL, mod.greenyellow)) #so this now filters the module by intersect
 #inModule
 #inModule = is.finite(match(moduleColors, modules));
 modProbes = annot[inModule,]$SYMBOL;
@@ -815,7 +839,7 @@ modGenes = annot[inModule,]$ENTREZID;
 modTOM = TOM[inModule, inModule];
 dimnames(modTOM) = list(modGenes, modGenes)
 # Export the network into edge and node list files Cytoscape can read
-cyt_darkgreen = exportNetworkToCytoscape(modTOM,
+cyt_greenyellow = exportNetworkToCytoscape(modTOM,
 edgeFile = paste("GSE37614_CytoscapeInput-edges-", paste(modules, collapse="-"), ".txt", sep=""),
 nodeFile = paste("GSE37614_CytoscapeInput-nodes-", paste(modules, collapse="-"), ".txt", sep=""),
 threshold = 0.1,
