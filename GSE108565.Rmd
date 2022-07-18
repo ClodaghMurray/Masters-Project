@@ -50,7 +50,7 @@ ord <- order(gs)
 palette <- palette(c("#1B9E77", "#7570B3"))
 par(mar=c(7,4,2,1))
 title <- "GSE108565 Log2 Normalized Signals"
-boxplot(qnorm[,ord], boxwex=0.6, notch=T, main=title, outline=FALSE, las=2, col=gs[ord])
+boxplot(exprs(gset)[,ord], boxwex=0.6, notch=T, main=title, outline=FALSE, las=2, col=gs[ord])
 legend("topleft",orientation, fill=palette(), bty="n")
 ```
 
@@ -97,6 +97,7 @@ rownames(qnorm) <- master_sub$hgnc_symbol
 head(qnorm[1:3,1:3])
 #write.csv(qnorm, "/home/clodagh/MASTERS PROJECT/GSE37614/GSE108565_qnorm", row.names =T)
 qnorm <- read.csv("/home/clodagh/MASTERS PROJECT/GSE37614/GSE108565_qnorm", sep = ",", row.names = 1)
+dim(qnorm)
 ```
 
 ```{r}
@@ -106,13 +107,40 @@ hist(medians, 150, col = "cornsilk1", freq = FALSE,
              main = "Histogram of the median intensities", 
              border = "antiquewhite4", xlab = "Median intensities")
 ```
-# Remove outlier
-```{r}
-colnames(qnorm)
-qnorm <- qnorm[,-8]
+## Sanity check - Resistant samples should have high CD10 and GPR77
 
-meta <- meta[-8,]
+```{r}
+sym <- as.data.frame(t(qnorm[c("ECE1", "C5AR2"),]))
+png("/home/clodagh/MASTERS PROJECT/GSE37614/CD10 boxplot.png")
+ggplot(sym, aes(x=groups, y = sym[,"ECE1"],fill = groups)) +
+geom_point(size = .9, alpha = 0.7,
+position = position_jitter(width = 0.2),
+show.legend=F) +
+  geom_boxplot(colour = "grey30",
+show.legend = F,
+outlier.shape = NA,
+varwidth = TRUE,
+size = 0.2, alpha = 0.4) +
+  ggtitle("CD10+") +
+# log scaled x axis to visualise low counts
+scale_y_continuous(breaks = c(13,13.5,14,14,5)) +
+scale_color_manual() +
+  ylab("Normalized Expression") +
+theme_minimal() +
+  theme(
+  # no need for axis title as vehicles are shown
+axis.title.x = element_blank(),
+axis.title.y = element_text(),
+# centre and bold plot title
+plot.title = element_text(hjust = 0.5, face = "bold", size = 15),
+plot.margin = margin(t = 4, r = 10, b = 4, l = 4, "pt")) +
+stat_compare_means(method = "t.test")
+dev.off()
+
+
+
 ```
+
 
 # Samples
 ```{r}
@@ -190,6 +218,7 @@ fit2 <- contrasts.fit(fit, cont.matrix)
 ```{r}
 # compute statistics and table of top significant genes
 fit2 <- eBayes(fit2, 0.01)
+res <- decideTests(fit2)
 ```
 
 
@@ -224,10 +253,10 @@ points(sig$logFC, -log10(sig$adj.P.Val), col="red", pch="*")
 
 ```{r}
 
-png("/home/clodagh/MASTERS PROJECT/GSE37614/GSE108565_clustering_heatmap.png")
+#png("/home/clodagh/MASTERS PROJECT/GSE37614/GSE108565_clustering_heatmap.png")
 title = "GSE108565 398 DEGs"
 pheatmap(log2(sig_exprs[,ord]), trace="none", scale="row", cexRow=0.2, cexCol=0.7, annotation_col = annotation_for_heatmap, show_rownames = F, show_colnames = F, cluster_cols = T, main = title)
-dev.off()
+#dev.off()
 ```
 
 # Gene Ontology
@@ -272,6 +301,7 @@ DT::datatable(goEnrichment, options = list(scrollX = TRUE, pageLength = 10, scro
 png("/home/clodagh/MASTERS PROJECT/GSE37614/GSE108565_DEGS_GOdata.png")
 showSigOfNodes(GOdata, score(results.ks), firstSigNodes = 5, useInfo = "all")
 ```
+
 ```{r}
 rm(mean)
 require(ggplot2)
