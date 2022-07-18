@@ -1,0 +1,1040 @@
+---
+title: "GSE37614 DEGs and GSEA"
+author: "Clodagh Murray"
+date: "7/9/2022"
+output: html_document
+---
+
+```{r}
+library(Biobase)
+library(ggpubr)
+library(data.table)
+library(DT)
+library(dplyr)
+library(ggpubr)
+library(ggplot2)
+library(limma)
+library(RColorBrewer)
+library(pheatmap)
+library(PCAtools)
+```
+
+
+```{r}
+qnorm <- read.csv("/home/clodagh/MASTERS PROJECT/GSE37614/GSE37614_qnorm.csv", row.names=1)
+meta <-  read.csv("/home/clodagh/MASTERS PROJECT/GSE37614/metadata.csv", sep = "\t")
+```
+
+
+# Exploratory Data Analysis
+## Sample heatmap
+
+```{r}
+phenotype_names <- meta$Cancer_Subtype
+batch <- meta$Batch
+annotation_for_heatmap <- 
+  data.frame(subtype = phenotype_names,  Batch= batch)
+row.names(annotation_for_heatmap) <- rownames(meta)
+```
+
+
+
+```{r}
+dists <- as.matrix(dist(t(qnorm), method = "manhattan"))
+
+rownames(dists) <- rownames(meta)
+hmcol <- colorRampPalette(RColorBrewer::brewer.pal(9, "YlOrRd"))(255)
+colnames(dists) <- NULL
+diag(dists) <- NA
+
+ann_colors <- list(
+  subtype= c("TNBC" = "chartreuse4", "Her2+" = "burlywood3", "ER+" = "purple"),
+  Batch = c(b1= "blue4", b2 = "cadetblue2")
+                   )
+pheatmap(dists, col = (hmcol), cluster_rows= T,
+         annotation_row = annotation_for_heatmap,
+         annotation_colors = ann_colors,
+         legend = TRUE, 
+         treeheight_row = 0,
+         legend_breaks = c(min(dists, na.rm = TRUE), 
+                         max(dists, na.rm = TRUE)), 
+         legend_labels = (c("small distance", "large distance")),
+         main = "Clustering heatmap for the calibrated samples")
+```
+
+
+
+## Pearsons Correlation btween PCs and batch and cancer
+
+```{r}
+pca <- PCAtools::pca(log2(qnorm + 1), metadata = meta)
+
+PCAtools::eigencorplot(pca, components = PCAtools::getComponents(pca, 1:10),
+    metavars = c('Batch','Cancer_Subtype'),
+    col = c('white', 'cornsilk1', 'gold', 'forestgreen', 'darkgreen'),
+    cexCorval = 1.2, fontCorval = 2, posLab = 'all', rotLabX = 45,
+    scale = TRUE,
+    main = bquote(PC ~ Pearson ~ r^2 ~ clinical ~ correlates),
+    plotRsquared = TRUE,
+    corFUN = 'pearson',
+    corUSE = 'pairwise.complete.obs',
+    corMultipleTestCorrection = 'BH',
+    signifSymbols = c('****', '***', '**', '*', ''),
+    signifCutpoints = c(0, 0.0001, 0.001, 0.01, 0.05, 1))
+```
+
+
+## Limma Differential Expression with batch covariate
+
+```{r}
+groups <- as.factor(meta$Cancer_Subtype)
+batch <- as.factor(meta$Batch)
+design <- model.matrix(~0 + groups + batch)
+gps <- c("ER", "HER", "TNBC", "b2")
+colnames(design) <- gps
+# do not remove atch prior to linear modelling
+#rm_batch <- limma::removeBatchEffect(log2(qnorm + 1), batch = meta$Batch, design=design)
+aw <- arrayWeights(log2(qnorm)+1, design)
+
+fit <- limma::lmFit(log2(qnorm)+1, design, weights = aw)
+#write.table(rm_batch, file = '/home/clodagh/MASTERS PROJECT/GSE37614/GSE37614_rm_batch.txt', sep ='\t', col.names = T, row.names = T)
+
+# Set up contrasts of interest
+cts <- c("HER-ER", "HER-TNBC", "ER-TNBC")
+cont.matrix <- limma::makeContrasts(contrasts=cts, levels=design)
+
+fit2 <- limma::contrasts.fit(fit, cont.matrix)
+fit2 <- limma::eBayes(fit2,0.01)
+res <- limma::decideTests(fit2)
+summary(res)
+```
+
+## PCA Cancer Subtype (Corrected)
+
+```{r}
+PCA <- prcomp(t(log2(qnorm)), scale = TRUE)
+percentVar <- round(100*PCA$sdev^2/sum(PCA$sdev^2),1)
+sd_ratio <- sqrt(percentVar[2] / percentVar[1])
+
+dataGG <- data.frame(PC1 = PCA$x[,1], PC2 = PCA$x[,2],
+                    Subtype = meta$Cancer_Subtype)
+
+
+ggscatter(dataGG, x="PC1", y="PC2",
+                  color = "Subtype", palette = c("dodgerblue4", "darkorange2", "chartreuse", "purple"),
+                  title = "PCA plot log-transformed batch corrected data",
+                  subtitle = "Cancer Subtypes",
+                  xlab = paste0("PC1, VarExp: ", percentVar[1], "%"),
+                  ylab = paste0("PC2, VarExp: ", percentVar[2], "%"),
+                  ellipse = F, star.plot = T, 
+                  ggtheme = theme_bw()) + 
+                  theme(legend.position = "right") + 
+                  theme(plot.title = element_text(hjust = 0.5, face = "bold"))
+```
+
+# Differentially Expressed Genes
+## No coefficient
+```{r}
+# all genes with a p value < 0.05 and abs(logFC) over 0.5 for any contrast
+tT <- topTable(fit2, adjust="fdr", number=Inf)
+#write.csv(tT, "/home/clodagh/MASTERS PROJECT/GSE37614/GSE37614_tT.csv", row.names =T)
+top_sig <- tT[tT$adj.P.Val <= 0.05 & (abs(tT[,1]) > 0.5 | abs(tT[,2]) > 0.5), ];
+nrow(top_sig)                  
+```
+## Heatmap 
+```{r}
+top_sigg <- qnorm[rownames(qnorm) %in% rownames(top_sig),]
+top_sigg<- t(top_sigg)
+top_sigg <- scale(top_sigg, center=T, scale = T)
+top_sigg <- t(top_sigg)
+dim(top_sigg)
+# logFC >= 0.5 & adjusted p-value <= 0.05
+#write.table(top_sigg, "GSE37614_DEGs_overall.csv", row.names=T, sep="\t")
+
+annot_col <- data.frame(row.names = colnames(qnorm), Group = factor(meta$Cancer_Subtype))
+
+cols <- c("pink", "blue", "orange")
+names(cols) <- c("ER+", "Her2+", "TNBC")
+annot_colors <- list(Group = cols)
+
+library(viridis)
+```
+
+
+```{r}
+ord <- c(11,12,13,14,15,16,22,1,2,3,4,17,18,19,5,6,7,8,9,10,20,21)
+pheatmap::pheatmap(top_sigg[,ord], col =  colorRampPalette(rev(brewer.pal(n = 10, name =
+"RdYlBu")))(100),cluster_cols =  F, cluster_rows = T, show_rownames=F, show_colnames = F,
+annotation= annot_col, border_color=NA, fontsize = 10, scale="row",
+     fontsize_row = 10, height=20, main = "GSE37614 388 DEGS (logFC > 0.5 & adj.p.val < 0.05) ")
+```
+
+
+
+### coef = 1 (ER-Her2)
+```{r}
+#Create the top table for the comparison (coef) we want
+top1 <- topTable(fit2, coef=1, adjust="fdr", sort.by="B", number = Inf)
+
+#Top Table of significant genes only
+up_reg1 <- top1[top1$adj.P.Val <= 0.05 & abs(top1$logFC) >= 0.5, ];
+nrow(up_reg1)
+```
+## Volcano plot of ER-HER2
+```{r}
+plot(top1$logFC, -log10(top1$adj.P.Val), pch="*", xlab="Log2 Fold Change", ylab="-10log (adjusted p-value)", main = "ER vs. Her2 DEGs")
+abline(h=-log10(0.05), v=c(-0.5, 0.5), col="red", lty=2)
+points(up_reg1$logFC, -log10(up_reg1$adj.P.Val), col="red", pch="*")
+```
+
+```{r}
+library(gplots)
+sig_HER_ER <- qnorm[rownames(qnorm) %in% rownames(up_reg1),]
+sig_HER_ER  <- t(sig_HER_ER)
+sig_HER_ER  <- scale(sig_HER_ER , center=T, scale = T)
+sig_HER_ER  <- t(sig_HER_ER)
+dim(sig_HER_ER)
+pheatmap::pheatmap(sig_HER_ER[,ord], col =  colorRampPalette(rev(brewer.pal(n = 10, name =
+"RdYlBu")))(100),cluster_cols =  F, cluster_rows = T, show_rownames=F, show_colnames = F,
+annotation= annot_col, border_color=NA, fontsize = 10, scale="row",
+     fontsize_row = 10, height=20, main = "HER2 vs ER+ DEGs")
+#heatmap.2(sig_HER_ER, trace="none", scale="row", col="redgreen", cexRow=0.2, cexCol=0.7, main = "HER vs ER DEGS")
+```
+
+
+
+
+
+### coef = 2 (Her2-TNBC)
+```{r}
+top2 <- topTable(fit2, coef=2, adjust="fdr", sort.by="B", number = Inf)
+
+#Top Table of significant genes only
+up_reg2 <- top2[top2$adj.P.Val <= 0.05 & abs(top2$logFC) >= 0.5, ];
+nrow(up_reg2)
+```
+## Volcano plot of HER2 vs TNBC
+```{r}
+plot(top2$logFC, -log10(top2$adj.P.Val), pch="*", xlab="Log2 Fold Change", ylab="-10log (adjusted p-value)", main = "Her2 vs TNBC DEGs")
+abline(h=-log10(0.05), v=c(-0.5, 0.5), col="red", lty=2)
+points(up_reg2$logFC, -log10(up_reg2$adj.P.Val), col="red", pch="*")
+```
+
+```{r}
+library(gplots)
+sig_HER_TNBC <- qnorm[rownames(qnorm) %in% rownames(up_reg2),]
+sig_HER_TNBC  <- t(sig_HER_TNBC)
+sig_HER_TNBC  <- scale(sig_HER_TNBC , center=T, scale = T)
+sig_HER_TNBC  <- t(sig_HER_TNBC)
+
+pheatmap::pheatmap(sig_HER_TNBC[,ord], col =  colorRampPalette(rev(brewer.pal(n = 10, name =
+"RdYlBu")))(100),cluster_cols =  F, cluster_rows = T, show_rownames=F, show_colnames = F,
+annotation= annot_col, border_color=NA, fontsize = 10, scale="row",
+     fontsize_row = 10, height=20, main = "HER2 vs TNBC DEGs")
+#heatmap.2(sig_HER_TNBC, trace="none", scale="row", col="redgreen", cexRow=0.2, cexCol=0.7, main = "HER vs TNBC DEGS")
+```
+
+
+### coef = 3 (TNBC-ER) ZERO
+```{r}
+top3 <- topTable(fit2, coef=3, adjust="fdr", sort.by="B", number = Inf)
+
+#Top Table of significant genes only
+up_reg3 <-  top3[top3$adj.P.Val <= 0.05, ];
+nrow(up_reg3)
+```
+
+```{r}
+library("VennDiagram")
+genes <- list(c1= rownames(sig_HER_ER),
+             c2=rownames(sig_HER_TNBC),
+             c3=rownames(up_reg3))
+
+ol = calculate.overlap(x = genes)
+ol_size=sapply(ol, length)
+
+# move to new plotting page
+grid.newpage()
+  
+Background <- nrow(qnorm)
+colours <- c('#CE2F17', '#E0FFFF', '#88D969')
+# create Venn diagram with three sets
+venn.diagram(x = list(rownames(sig_HER_ER),
+             rownames(sig_HER_TNBC),
+             rownames(up_reg3)),
+             category.names = c('HER-ER', 'HER-TNBC', 'ER-TNBC'),
+             filename = '/home/clodagh/MASTERS PROJECT/GSE37614/DEG_Overlap_Ven.png',
+             output = T,
+             main = 'GSE37614 DEGs (|logFC| > 0.5 and adj.p.val <0.05)',
+             imagetype = 'png',
+             scaled = F,
+             col = 'grey70',
+             fill = colours,
+             cat.cex = 1,
+             fontfamily = "sans",
+            sub.pos = c(.5,.80),
+            cat.default.pos = "outer",
+            hyper.test = T,
+            total.population = nrow(qnorm),
+            lower.tail = F,
+             margin = 0.15 )
+options(repr.plot.height=12, repr.plot.width = 12)
+library('png')
+pp <- readPNG('/home/clodagh/MASTERS PROJECT/GSE37614/DEG_Overlap_Ven.png')
+plot.new()
+rasterImage(pp, 0,0,1.1, 1.1)
+```
+
+
+## Heatmap 
+
+```{r}
+DEG_names <- c(rownames(up_reg1), rownames(up_reg2))
+DEG_names <- unique(DEG_names)
+e <- qnorm
+sig_exprs <- e[rownames(e) %in% DEG_names,]
+sig_exprs <- t(sig_exprs)
+sig_exprs <- scale(sig_exprs, center=T, scale = T)
+sig_exprs <- t(sig_exprs)
+dim(sig_exprs)
+annot_col <- data.frame(row.names = colnames(qnorm), Group = meta$Cancer_Subtype)
+
+cols <- c("pink", "blue", "yellow")
+names(cols) <- c("ER+", "Her2+", "TNBC")
+annot_colors <- list(Group = cols)
+
+
+library(viridis)
+
+ER_HER <- up_reg1[up_reg1$adj.P.Val < 0.05 & up_reg1$logFC <= -1, c("logFC", "adj.P.Val")]
+ER_HER <- ER_HER[order(ER_HER$logFC),]
+#write.csv(ER_HER, "/home/clodagh/MASTERS PROJECT/GSE37614/ER_HER_tT_lfc1_down.csv", row.names=T)
+
+HER_TNBC <- up_reg2[up_reg2$adj.P.Val < 0.05 & up_reg2$logFC <= -1, c("logFC", "adj.P.Val")]
+HER_TNBC <- HER_TNBC[order(HER_TNBC$logFC),]
+#write.csv(HER_TNBC, "/home/clodagh/MASTERS PROJECT/GSE37614/HER_TNBC_tT_lfc1_down.csv", row.names=T)
+```
+
+## Top Table
+
+```{r}
+tT_df <- tT[rownames(sig_exprs),]
+DT::datatable(tT_df, rownames = T, options = list(scrollX = TRUE, pageLength = 7, scroller = TRUE))
+```
+
+
+
+
+
+# TopGO
+```{r}
+library(topGO)
+library(Rgraphviz)
+library(org.Hs.eg.db)
+library(ggplot2)
+library(enrichR)
+library(enrichplot)
+
+# DEGs |logFC| over 0.5
+list <- tT$adj.P.Val
+names(list) <- rownames(top_sig)
+
+# selection is function that returns TRUE/FALSE for p-values<0.05
+selection <- function(x) TRUE
+
+allGO2genes <- annFUN.org(whichOnto="BP", feasibleGenes=NULL, mapping="org.Hs.eg.db", ID="symbol")
+
+GOdata <- new("topGOdata", ontology="BP", allGenes=list, annot=annFUN.GO2genes, GO2genes=allGO2genes, geneSel=selection, nodeSize=10)
+
+```
+## Perform Enrichment 
+```{r}
+results.ks <- runTest(GOdata, algorithm="classic", statistic="ks")
+goEnrichment <- GenTable(GOdata, KS=results.ks, orderBy="KS", topNodes=20)
+goEnrichment$KS <- as.numeric(goEnrichment$KS)
+goEnrichment <- goEnrichment[goEnrichment$KS<0.05,]
+goEnrichment <- goEnrichment[,c("GO.ID","Term","KS")]
+goEnrichment$Term <- gsub(" [a-z]*\\.\\.\\.$", "", goEnrichment$Term)
+goEnrichment$Term <- gsub("\\.\\.\\.$", "", goEnrichment$Term)
+goEnrichment$Term <- paste(goEnrichment$GO.ID, goEnrichment$Term, sep=", ")
+goEnrichment$Term <- factor(goEnrichment$Term, levels=rev(goEnrichment$Term))
+#write.table(goEnrichment, "/home/clodagh/MASTERS PROJECT/GSE37614/GSE37614_DEGs_GO_Enrichment", sep = "\t", row.names = F)
+```
+
+```{r}
+DT::datatable(goEnrichment, options = list(scrollX = TRUE, pageLength = 10, scroller = TRUE))
+```
+
+```{r}
+rm(mean)
+require(ggplot2)
+ggplot(goEnrichment, aes(x=Term, y= KS, fill =KS)) +
+    stat_summary(geom = "bar", fun = mean, position = "dodge") +
+    ylab("Enrichment (-log10(p-value))") +
+    ggtitle("GSE37614 GO Biological Process DEGs") +
+    scale_y_continuous(breaks = round(seq(0, max(-log10(goEnrichment$KS)), by = 2), 1)) +
+    theme_bw(base_size=24) +
+    theme(
+        legend.position='none',
+        legend.background=element_rect(),
+        plot.title=element_text(angle=0, size=14, face="bold", vjust=1),
+        axis.text.x=element_text(angle=0, size=8, face="bold", hjust=1.10),
+        axis.text.y=element_text(angle=0, size=8, face="bold", vjust=0.5),
+        axis.title.y = element_blank(),
+        axis.title.x =element_text(size=14, face="bold"),
+        legend.key=element_blank(),     #removes the border
+        legend.key.size=unit(1, "cm"),      #Sets overall area/size of the legend
+        legend.text=element_text(size=18),  #Text size
+        title=element_text(size=18)) +
+        guides(colour=guide_legend(override.aes=list(size=2.5))) +
+        
+    coord_flip()
+```
+
+
+
+# Venn Diagram
+```{r}
+# summarize test results as "up", "down" or "not expressed"
+dT <- decideTests(fit2, adjust.method="fdr", p.value=0.05, lfc = 0.5)
+vennDiagram(dT, circle.col=palette())
+
+intersected <- rowSums(dT[, c("HER-ER", "HER-TNBC")] != 0L) == 2L
+intersect_genes <- names(which(intersected))
+```
+
+
+## Plot of top DEGS between both HER2 and ER+ and HER2 and TNBC
+```{r}
+intersect_plot <- e[rownames(e) %in% intersect_genes,]
+
+library(RColorBrewer)
+library(pheatmap)
+### Set a color palette
+heat.colors <- brewer.pal(200, "YlOrRd")
+
+
+### Run pheatmap
+pheatmap(log2(intersect_plot[,ord]), color = heat.colors, cluster_cols =  F, cluster_rows = T, show_rownames=F,
+annotation= annot_col, border_color=NA, fontsize = 10, scale="row",
+     fontsize_row = 10, height=20, main = "164 overlapping DEGs")
+```
+## GSEA of 164 overlapping genes
+
+```{r}
+library(org.Hs.eg.db)
+library(DOSE) #Disease ontology; description of gene products with disease perspectvies
+library(pathview)
+library(clusterProfiler)
+library(AnnotationHub)
+library(ensembldb)
+library(tidyverse)
+library(fgsea)
+library(stringr) #used to wrap text on dotplot
+library(ggplot2)
+library(AnnotationDbi)
+```
+
+```{r}
+hs <- org.Hs.eg.db
+
+all_genes_entrez <- AnnotationDbi::select(hs, 
+       keys = rownames(qnorm),
+       columns = c("ENTREZID", "SYMBOL"),
+       keytype = "SYMBOL")
+
+overlap_entrez <- AnnotationDbi::select(hs, 
+       keys = rownames(intersect_plot),
+       columns = c("ENTREZID", "SYMBOL"),
+       keytype = "SYMBOL")
+
+```
+
+# Coeff 1 HER-ER
+
+```{r}
+coeff1 <- AnnotationDbi::select(hs, 
+       keys = rownames(upreg1),
+       columns = c("ENTREZID", "SYMBOL"),
+       keytype = "SYMBOL")
+```
+```{r}
+# no biological process (BP)
+ego <- enrichGO(gene = coeff1$ENTREZID, 
+                keyType = "ENTREZID",
+                universe =  all_genes_entrez$ENTREZID,
+                OrgDb = org.Hs.eg.db, 
+                ont = "BP", #Biological Processes GO term, also done for CC and MF
+                pAdjustMethod = "BH", 
+                qvalueCutoff = 0.05, 
+                readable = TRUE)
+
+cluster_BP_summary <- data.frame(ego)
+#View(cluster_BP_summary)
+write.csv(cluster_BP_summary, "/home/clodagh/MASTERS PROJECT/GSE37614/coeff1_BP.csv")
+png(file='/home/clodagh/MASTERS PROJECT/GSE37614/coeff1_BP.png', width = 6, height = 5, units ="in", res = 600)
+dotplot(ego, showCategory=10) + ggtitle("HER-ER DEGs GO (Biological Process)")  +
+  theme_classic()
+dev.off()
+```
+```{r}
+# (CC)
+ego <- enrichGO(gene = coeff1$ENTREZID, 
+                keyType = "ENTREZID",
+                universe =  all_genes_entrez$ENTREZID,
+                OrgDb = org.Hs.eg.db, 
+                ont = "CC", #Biological Processes GO term, also done for CC and MF
+                pAdjustMethod = "BH", 
+                qvalueCutoff = 0.05, 
+                readable = TRUE)
+
+cluster_BP_summary <- data.frame(ego)
+#View(cluster_BP_summary)
+write.csv(cluster_BP_summary, "/home/clodagh/MASTERS PROJECT/GSE37614/coeff1_CC.csv")
+png(file='/home/clodagh/MASTERS PROJECT/GSE37614/coeff1_CC.png', width = 6, height = 5, units ="in", res = 600)
+dotplot(ego, showCategory=10) + ggtitle("HER-ER DEGs GO (Cellular Component)")  +
+  theme_classic()
+dev.off()
+```
+```{r}
+# MF
+ego <- enrichGO(gene = coeff1$ENTREZID, 
+                keyType = "ENTREZID",
+                universe =  all_genes_entrez$ENTREZID,
+                OrgDb = org.Hs.eg.db, 
+                ont = "MF", #Biological Processes GO term, also done for CC and MF
+                pAdjustMethod = "BH", 
+                qvalueCutoff = 0.05, 
+                readable = TRUE)
+
+cluster_BP_summary <- data.frame(ego)
+#View(cluster_BP_summary)
+write.csv(cluster_BP_summary, "/home/clodagh/MASTERS PROJECT/GSE37614/coeff1_MF.csv")
+png(file='/home/clodagh/MASTERS PROJECT/GSE37614/coeff1_MF.png', width = 6, height = 5, units ="in", res = 600)
+dotplot(ego, showCategory=10) + ggtitle("HER-ER DEGs GO (Molecular Function)")  +
+  theme_classic()
+dev.off()
+```
+
+
+
+
+
+# Coeff 2 HER-TNBC
+
+```{r}
+coeff2 <- AnnotationDbi::select(hs, 
+       keys = rownames(up_reg2),
+       columns = c("ENTREZID", "SYMBOL"),
+       keytype = "SYMBOL")
+```
+```{r}
+# no biological process (BP)
+ego <- enrichGO(gene = coeff2$ENTREZID, 
+                keyType = "ENTREZID",
+                universe =  all_genes_entrez$ENTREZID,
+                OrgDb = org.Hs.eg.db, 
+                ont = "BP", #Biological Processes GO term, also done for CC and MF
+                pAdjustMethod = "BH", 
+                qvalueCutoff = 0.05, 
+                readable = TRUE)
+
+cluster_BP_summary <- data.frame(ego)
+#View(cluster_BP_summary)
+write.csv(cluster_BP_summary, "/home/clodagh/MASTERS PROJECT/GSE37614/coeff2_BP.csv")
+png(file='/home/clodagh/MASTERS PROJECT/GSE37614/coeff2_BP.png', width = 6, height = 5, units ="in", res = 600)
+dotplot(ego, showCategory=10) + ggtitle("HER-TNBC DEGs GO (Biological Process)")  +
+  theme_classic()
+dev.off()
+```
+
+```{r}
+# (CC)
+ego <- enrichGO(gene = coeff2$ENTREZID, 
+                keyType = "ENTREZID",
+                universe =  all_genes_entrez$ENTREZID,
+                OrgDb = org.Hs.eg.db, 
+                ont = "CC", #Biological Processes GO term, also done for CC and MF
+                pAdjustMethod = "BH", 
+                qvalueCutoff = 0.05, 
+                readable = TRUE)
+
+cluster_BP_summary <- data.frame(ego)
+#View(cluster_BP_summary)
+write.csv(cluster_BP_summary, "/home/clodagh/MASTERS PROJECT/GSE37614/coeff2_CC.csv")
+png(file='/home/clodagh/MASTERS PROJECT/GSE37614/coeff2_CC.png', width = 6, height = 5, units ="in", res = 600)
+dotplot(ego, showCategory=10) + ggtitle("HER-TNBC DEGs GO (Cellular Component)")  +
+  theme_classic()
+dev.off()
+```
+
+```{r}
+# MF
+ego <- enrichGO(gene = coeff2$ENTREZID, 
+                keyType = "ENTREZID",
+                universe =  all_genes_entrez$ENTREZID,
+                OrgDb = org.Hs.eg.db, 
+                ont = "MF", #Biological Processes GO term, also done for CC and MF
+                pAdjustMethod = "BH", 
+                qvalueCutoff = 0.05, 
+                readable = TRUE)
+
+cluster_BP_summary <- data.frame(ego)
+#View(cluster_BP_summary)
+write.csv(cluster_BP_summary, "/home/clodagh/MASTERS PROJECT/GSE37614/coeff2_MF.csv")
+png(file='/home/clodagh/MASTERS PROJECT/GSE37614/coeff2_MF.png', width = 6, height = 5, units ="in", res = 600)
+dotplot(ego, showCategory=10) + ggtitle("HER-TNBC DEGs GO (Molecular Function)")  +
+  theme_classic()
+dev.off()
+```
+
+
+
+
+
+
+
+# DEGs overlap GSEA 
+```{r}
+# no biological process (BP)
+ego <- enrichGO(gene = overlap_entrez$ENTREZID, 
+                keyType = "ENTREZID",
+                universe =  all_genes_entrez$ENTREZID,
+                OrgDb = org.Hs.eg.db, 
+                ont = "BP", #Biological Processes GO term, also done for CC and MF
+                pAdjustMethod = "BH", 
+                qvalueCutoff = 0.05, 
+                readable = TRUE)
+
+cluster_BP_summary <- data.frame(ego)
+#View(cluster_BP_summary)
+#write.csv(cluster_BP_summary, "/home/clodagh/MASTERS PROJECT/GSE37614/overlap_BP.csv")
+#png(file='/home/clodagh/MASTERS PROJECT/GSE37614/overlap_BP.png')
+dotplot(ego, showCategory=10) + ggtitle("Overlapping DEGs GO (Biological Process)")  +
+  theme_classic()
+dev.off()
+
+
+# Cellular Compartment
+ego <- enrichGO(gene = overlap_entrez$ENTREZID, 
+                keyType = "ENTREZID",
+                OrgDb = org.Hs.eg.db, 
+                universe =  all_genes_entrez$ENTREZID,
+                ont = "CC", #Biological Processes GO term, also done for CC and MF
+                pAdjustMethod = "BH", 
+                qvalueCutoff = 0.05, 
+                readable = TRUE)
+
+
+cluster_CC_summary <- data.frame(ego)
+#View(cluster_CC_summary)
+#write.csv(cluster_CC_summary,'/home/clodagh/MASTERS PROJECT/GSE37614/GSE37614_overlap_DEGs_CC.csv')
+#png("/home/clodagh/MASTERS PROJECT/GSE37614/DEGs_overlap_CC.png", width= 5.5,
+#  height = 4.25,
+ # units = "in",
+ # res= 500)
+dotplot(ego, showCategory=10) + ggtitle("Overlapping DEGs GO (Cellular Component)")  + theme_classic()
+#dev.off()
+```
+
+#Molecular Function
+```{r}
+ego <- enrichGO(gene = overlap_entrez$ENTREZID, 
+                keyType = "ENTREZID",
+                OrgDb = org.Hs.eg.db, 
+                universe =  all_genes_entrez$ENTREZID,
+                ont = "MF", #Biological Processes GO term, also done for CC and MF
+                pAdjustMethod = "BH", 
+                qvalueCutoff = 0.05, 
+                readable = TRUE)
+
+
+cluster_MF_summary <- data.frame(ego)
+View(cluster_MF_summary)
+#write.csv(cluster_MF_summary,'/home/clodagh/MASTERS PROJECT/GSE37614/GSE37614_overlap_DEGs_MF.csv')
+#png("/home/clodagh/MASTERS PROJECT/GSE37614/DEGs_overlap_MF.png", width= 5.5,
+#  height = 4.25, units = "in", res= 500)
+dotplot(ego, showCategory=10) + ggtitle("Overlapping DEGs GO (Molecular Function)")  +theme_classic()
+#dev.off()
+```
+
+## Overlap KEGG
+```{r}
+kegg <- enrichKEGG(gene = overlap_entrez$ENTREZID,
+                       organism = 'hsa',
+                      key = "kegg",
+                       universe = all_genes_entrez$ENTREZID,
+                       pvalueCutoff = 0.05)
+tab.kegg <- as.data.frame(kegg)
+tab.kegg<- subset(tab.kegg, Count>5)
+
+```
+
+
+
+
+
+# Fold change over 2
+### (ER-Her2)
+```{r}
+#Top Table of significant genes only
+up_reg_fc1 <- top1[top1$adj.P.Val <= 0.05 & abs(top1$logFC) >= 2, ];
+nrow(up_reg_fc1)
+```
+### (Her2-TNBC)
+```{r}
+#Top Table of significant genes only
+up_reg_fc2_ <- top2[top1$adj.P.Val <= 0.05 & abs(top2$logFC) >= 2, ];
+nrow(up_reg_fc2_)
+```
+# combind sig genes fc > 2
+
+```{r}
+up_reg_names <- c(rownames(up_reg_fc1), rownames(up_reg_fc2_))
+both_sig_exprs <- e[rownames(e) %in% up_reg_names,]
+both_sig_exprs <- t(both_sig_exprs)
+both_sig_exprs <- scale(both_sig_exprs, center=T, scale = T)
+both_sig_exprs <- t(both_sig_exprs)
+dim(both_sig_exprs)
+
+```
+
+
+```{r}
+### Set a color palette
+heat.colors <- brewer.pal(100, "YlOrRd")
+
+### Run pheatmap
+pheatmap(both_sig_exprs[,ord], color = heat.colors, cluster_rows = T, show_rownames=T, cluster_cols = F,
+annotation= annot_col, border_color=NA, fontsize = 10, scale="row",
+     fontsize_row = 10, height=20, main = "Top 44 DEGs (fold change > 2)")
+```
+ 
+
+
+
+```{r}
+hs <- org.Hs.eg.db
+all_genes_entrez <- AnnotationDbi::select(hs, 
+       keys = rownames(qnorm),
+       columns = c("ENTREZID", "SYMBOL"),
+       keytype = "SYMBOL")
+
+dim(sig_exprs)
+DEG_entrez <-  AnnotationDbi::select(hs, 
+       keys = rownames(sig_exprs),
+       columns = c("ENTREZID", "SYMBOL"),
+       keytype = "SYMBOL")
+
+write.csv(DEG_entrez, "/home/clodagh/MASTERS PROJECT/GSE37614/GSE37614_DEG_entrez.csv", row.names = F)
+```
+
+```{r}
+# DEGs
+ego <- enrichGO(gene = DEGs$ENTREZID, 
+                keyType = "ENTREZID",
+                OrgDb = org.Hs.eg.db, 
+                universe = all_genes_entrez$ENTREZID,
+                ont = "MF", #Biological Processes GO term, also done for CC and MF
+                pAdjustMethod = "BH", 
+                qvalueCutoff = 0.05, 
+                readable = TRUE)
+
+cluster_CC_summary <- data.frame(ego)
+View(cluster_CC_summary)
+write.csv(cluster_CC_summary,'/home/clodagh/MASTERS PROJECT/GSE37614/GSE37614_DEGs_MF.csv')
+png("/home/clodagh/MASTERS PROJECT/GSE37614/DEGs_MF.png", width= 4.25,
+  height = 4.25,
+  units = "in",
+  res= 1200)
+dotplot(ego, showCategory=10) + ggtitle("DEGs GO (Molecular Function)")  +
+  theme_classic()
+dev.off()
+```
+
+
+```{r}
+#coeff =1
+upreg1 <- top1[top1$logFC > 0.5 & top1$adj.P.Val < 0.05, ]
+downreg1 <- top1[top1$logFC < -0.5 & top1$adj.P.Val < 0.05, ]
+
+#coeff = 2
+upreg2 <- top2[top2$logFC > 0.5 & top2$adj.P.Val < 0.05, ]
+downreg2 <- top2[top2$logFC < -0.5 & top2$adj.P.Val < 0.05, ]
+
+```
+
+
+
+
+
+
+
+
+
+# DEGs overall GSEA (BP)
+
+```{r}
+ego <- enrichGO(gene = DEG_entrez$ENTREZID, 
+                keyType = "ENTREZID",
+                OrgDb = org.Hs.eg.db, 
+                universe = all_genes_entrez$ENTREZID,
+                ont = "BP", #Biological Processes GO term, also done for CC and MF
+                pAdjustMethod = "BH", 
+                qvalueCutoff = 0.05, 
+                readable = TRUE)
+
+
+cluster_BP_summary <- data.frame(ego)
+View(cluster_BP_summary)
+pdf(file='/home/clodagh/MASTERS PROJECT/GSE37614/GSE37614_DEGs_BP.pdf')
+dotplot(ego, showCategory=10) + ggtitle("GSE37614 DEGs |logFC| >0.5 GO (Biological Process)")  +
+  theme_classic()
+dev.off()
+```
+
+# DEGs overall GSEA (CC)
+```{r}
+ego <- enrichGO(gene = DEG_entrez$ENTREZID, 
+                keyType = "ENTREZID",
+                OrgDb = org.Hs.eg.db, 
+                universe = all_genes_entrez$ENTREZID,
+                ont = "CC", #Biological Processes GO term, also done for CC and MF
+                pAdjustMethod = "BH", 
+                qvalueCutoff = 0.05, 
+                readable = TRUE)
+cluster_CC_summary <- data.frame(ego)
+View(cluster_CC_summary)
+#can see a llot of terms associated with chromosomal rearrangement
+pdf(file='/home/clodagh/MASTERS PROJECT/GSE37614/DEGS_CC.pdf')
+dotplot(ego, showCategory=10) + ggtitle("GSE37614 DEGS logFC| >0.5 GO (Cellular Component)")  +
+  theme_classic()
+dev.off()
+```
+
+# DEGs overall GSEA (MF)
+```{r}
+ego <- enrichGO(gene = DEG_entrez$ENTREZID, 
+                keyType = "ENTREZID",
+                OrgDb = org.Hs.eg.db, 
+                 universe = all_genes_entrez$ENTREZID,
+                ont = "MF", #Biological Processes GO term, also done for CC and MF
+                pAdjustMethod = "BH", 
+                qvalueCutoff = 0.05, 
+                readable = TRUE)
+cluster_MF_summary <- data.frame(ego)
+View(cluster_MF_summary)
+pdf(file='/home/clodagh/MASTERS PROJECT/GSE37614/DEGS_MF.pdf')
+dotplot(ego, showCategory=10) + ggtitle("GSE37614 DEGs logFC| >0.5 GO (Molecular Function)")  +
+  theme_classic()
+dev.off()
+```
+
+
+# DEGs overall KEGG
+```{r}
+library(clusterProfiler)
+library(msigdbr)
+kegg <- enrichKEGG(gene = DEG_entrez$ENTREZID,
+                       organism = 'hsa',
+                       universe = all_genes_entrez$ENTREZID,
+                       pvalueCutoff = 0.05)
+tab.kegg <- as.data.frame(kegg)
+tab.kegg<- subset(tab.kegg, Count>5)
+
+dr_hallmark_df <- msigdbr(
+  species = "Homo sapiens", # H for hallmark
+  category = "C2", #C5 for GO
+  subcategory = "CP:KEGG"
+)
+
+gsea_results <- GSEA(
+  geneList = t_vector, # Ordered ranked gene list
+  minGSSize = 25, # Minimum gene set size
+  maxGSSize = 500, # Maximum gene set set
+  pvalueCutoff = 0.05, # p-value cutoff
+  eps = 0, # Boundary for calculating the p-value
+  seed = TRUE, # Set seed to make results reproducible
+  pAdjustMethod = "BH", # Benjamini-Hochberg correction
+  TERM2GENE = dplyr::select(
+    dr_hallmark_df,
+    gs_name,
+    entrez_gene
+  )
+)
+
+gsea_result_df <- data.frame(gsea_results@result)
+
+
+png("/home/clodagh/MASTERS PROJECT/GSE37614/GSE37614_KEGG_barplotDEGs.png")
+KEGG <-gsea_result_df[gsea_result_df$p.adjust<0.005,]
+ggplot(KEGG, aes(reorder(ID, NES), NES)) +
+  geom_col(aes(fill=NES < 0)) +
+  #scale_fill_manual(name = '', values = setNames(c("#F46D43","#74ADD1"),c("", "")), guide = NULL) +
+  scale_fill_manual(values = c("#fa624b","#5e61fc")) +
+  coord_flip() +
+  labs(x="Pathway", y="Normalized Enrichment Score",
+       title="KEGG NES from GSEA") + 
+  theme_classic() 
+dev.off()
+
+```
+
+
+
+
+
+## GSEA Hallmarks for all DEGs
+```{r}
+#Prepare file for GSEA input; input ALL genes for testing (including middle ranked (non-significant as removing can reduce power)
+#rank genes based on signed pval
+top1 <- topTable(fit2, coef=1, adjust="fdr", sort.by="B", number = Inf)
+x <- top1
+x <- add_rownames(x, var = "symbol") #row to col 
+head(x)
+x$fcsign <- sign(x$logFC) #returns col of sign (+/- of LFC)
+x$logP=-log10(x$P.Value) #take log of all p val
+x$metric= x$logP/x$fcsign #signed pval ranking
+x <- x[order(-x$metric),] #order in descending order
+x <-  na.omit(x) #remove rows with na 
+dim(x)
+x <- x[!duplicated(x$symbol),] #remove duplicates
+```
+
+## REfine BIO tutorial
+```{r}
+# Attach the library
+library(clusterProfiler)
+
+# Package that contains MSigDB gene sets in tidy format
+library(msigdbr)
+
+# Zebrafish annotation package we'll use for gene identifier conversion
+library(org.Hs.eg.db)
+
+# We will need this so we can use the pipe: %>%
+library(magrittr)
+```
+
+```{r}
+# First let's create a mapped data frame we can join to the differential
+# expression stats
+dge_mapped_df <- data.frame(
+  entrez_id = mapIds(
+    # Replace with annotation package for the organism relevant to your data
+    org.Hs.eg.db,
+    keys = x$symbol,
+    # Replace with the type of gene identifiers in your data
+    keytype = "SYMBOL",
+    # Replace with the type of gene identifiers you would like to map to
+    column = "ENTREZID",
+    # This will keep only the first mapped value for each symbol
+    multiVals = "first"
+  )
+) %>%
+  # If a symbol doesn't map to a Entrez gene identifier,
+  # drop that from the data frame
+  dplyr::filter(!is.na(entrez_id)) %>%
+  # Make an `Ensembl` column to store the rownames
+  tibble::rownames_to_column("SYMBOL") %>%
+  # Now let's join the rest of the expression data
+  dplyr::inner_join(x, by = c("SYMBOL" = "symbol"))
+
+dge_mapped_df
+
+#write.csv(dge_mapped_df, "/home/clodagh/MASTERS PROJECT/GSE37614/GSE108565_dge_mapped_GSEA_table.csv")
+```
+
+```{r}
+any(duplicated(dge_mapped_df$entrez_id))
+```
+
+```{r}
+# Let's create a named vector ranked based on the t-statistic values
+t_vector <-dge_mapped_df$t
+names(t_vector) <- dge_mapped_df$entrez_id
+
+# We need to sort the t-statistic values in descending order here
+t_vector <- sort(t_vector, decreasing = TRUE)
+
+# Look at first entries of the ranked t-statistic vector
+head(t_vector)
+```
+
+
+# Run GSEA
+```{r}
+msigdbr_collections()
+
+dr_hallmark_df <- msigdbr(
+  species = "Homo sapiens", # H for hallmark
+  category = "H"
+)
+
+
+gsea_results <- GSEA(
+  geneList = t_vector, # Ordered ranked gene list
+  minGSSize = 25, # Minimum gene set size
+  maxGSSize = 500, # Maximum gene set set
+  pvalueCutoff = 0.05, # p-value cutoff
+  eps = 0, # Boundary for calculating the p-value
+  seed = TRUE, # Set seed to make results reproducible
+  pAdjustMethod = "BH", # Benjamini-Hochberg correction
+  TERM2GENE = dplyr::select(
+    dr_hallmark_df,
+    gs_name,
+    entrez_gene
+  )
+)
+
+gsea_result_df <- data.frame(gsea_results@result)
+
+Hall <- gsea_result_df[gsea_result_df$p.adjust<0.05,]
+ggplot(Hall, aes(reorder(ID, NES), NES)) +
+  geom_col(aes(fill=NES < 0)) +
+  #scale_fill_manual(name = '', values = setNames(c("#F46D43","#74ADD1"),c("", "")), guide = NULL) +
+  scale_fill_manual(values = c("#fa624b","#5e61fc")) +
+  coord_flip() +
+  labs(x="Pathway", y="Normalized Enrichment Score",
+       title="Hallmark NES from GSEA") + 
+  theme_classic() 
+dev.off()
+
+```
+
+
+# KEGG
+```{r}
+gsea_results <- gseKEGG(
+  geneList = t_vector, # Ordered ranked gene list
+  organism = "hsa",
+  keyType = "kegg",
+  minGSSize = 25, # Minimum gene set size
+  maxGSSize = 500, # Maximum gene set set
+  pvalueCutoff = 0.05, # p-value cutoff
+  eps = 0, # Boundary for calculating the p-value
+  seed = TRUE, # Set seed to make results reproducible
+  pAdjustMethod = "BH", # Benjamini-Hochberg correction
+  by = "fgsea"
+  )
+gsea_result_KEGG <- data.frame(gsea_results@result)
+gsea_result_KEGG <- gsea_result_KEGG %>% arrange(-NES)
+keggp <- gsea_result_KEGG[gsea_result_KEGG$p.adjust<0.000000005,]
+#write.csv(keggp, "/home/clodagh/MASTERS PROJECT/GSE37614/GSE108565_KEGG_pathways.csv")
+ggplot(keggp, aes(reorder(Description, NES), NES)) +
+  geom_col(aes(fill=NES < 0)) +
+  #scale_fill_manual(name = '', values = setNames(c("#F46D43","#74ADD1"),c("", "")), guide = NULL) +
+ scale_fill_manual(values = c("#fa624b","#5e61fc")) +
+  coord_flip() +
+  labs(x="Pathway", y="Normalized Enrichment Score",
+       title="KEGG NES from GSEA") + 
+  theme_classic() 
+dev.off()
+```
+
+
+
+
+
+
+
