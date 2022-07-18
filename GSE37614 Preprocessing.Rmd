@@ -1,0 +1,487 @@
+---
+title: "GSE37614 batch correction"
+author: "Clodagh Murray"
+date: "5/19/2022"
+output: html_document
+---
+
+
+### Libraries
+```{r, message =F}
+library(oligo)
+library(Biobase)
+library(ggpubr)
+library(data.table)
+library(DT)
+library(dplyr)
+library(ggpubr)
+library(ggplot2)
+library(limma)
+library(RColorBrewer)
+library(pheatmap)
+library(PCAtools)
+library(illuminaHumanv4.db)
+```
+
+## Raw Data Staging
+### 4 samples were analysed in both batches 1 and 2, creating 4 extra samples in the raw data - update metadata to match raw data 
+
+```{r}
+SDRF <- read.delim("/home/clodagh/MASTERS PROJECT/GSE37614/E-GEOD-37614.sdrf_fixed.txt")
+rownames(SDRF) <- SDRF$Array.Data.File
+DT::datatable(SDRF, options = list(scrollX = TRUE, pageLength = 23, scroller = TRUE))
+```
+
+## Count matrix matching metadata?
+```{r}
+## same as first attempt tbh
+gen_raw <- function(path, pattern){
+  files = list.files(path, pattern, full.names=T, recursive=T, include.dirs=T)
+  mat = as.data.frame(do.call(cbind, lapply(files, function(x) data.table::fread(x, stringsAsFactors=FALSE))))
+  ID_REF = mat[,1]
+  mat = as.data.frame(mat[,!grepl("ID_REF", colnames(mat))])
+  rownames(mat) = ID_REF
+  return(mat)
+}
+
+raw.dat <- gen_raw("/home/clodagh/MASTERS PROJECT/GSE37614/raw/", "\\.txt$")
+
+## attach sample names to cols
+file_names <- list.files("/home/clodagh/MASTERS PROJECT/GSE37614/raw/", "\\.txt$", full.names=T, recursive=T, include.dirs=T)
+file_names <- sub(".*/", "", file_names)
+sample_names <- sub("\\_.*", "", file_names)
+length(sample_names) == ncol(raw.dat)
+```
+
+## Append IDs to matrix
+
+```{r}
+#  append batch ID's to the sample names for unique colnames. 
+SDRF$samp_names <- paste(SDRF$Assay.Name, SDRF$Characteristics..batch., sep=".")
+
+```
+```{r}
+# make sure columns match file contents
+SDRF <- SDRF[match(file_names, SDRF$Array.Data.File),]
+colnames(raw.dat) <- SDRF$samp_names
+samples <- SDRF
+
+## the below is correct 
+head(raw.dat[1:5, 1:5])
+```
+
+## Make Expression Set manually
+
+```{r}
+SDRF <- Biobase::AnnotatedDataFrame(SDRF)
+rownames(SDRF) <- colnames(raw.dat)
+my_set <- Biobase::ExpressionSet(assayData = as.matrix(raw.dat), phenoData = SDRF)
+```
+
+## Raw Data Boxplot
+```{r}
+SDRF@data$FactorValue..PATIENT.ID.
+SDRF@data$Characteristics..class.[23] <- "Her2+"
+sml <- as.character(as.numeric(as.factor(SDRF@data$Characteristics..class.))) 
+gs <- factor(sml)
+groups <- SDRF@data$Characteristics..class. 
+orientation <- unique(groups)
+orientation <- c(orientation[2], orientation[3], orientation[1])
+levels(gs) <- orientation
+my_set@phenoData$group <- gs
+ord <- order(gs)
+
+palette <- palette(c("#1B9E77", "#7570B3", "pink"))
+
+par(mar=c(7,4,2,1))
+title <- "GSE37614 Log2 Raw Signals"
+boxplot(log2(exprs(my_set[,ord])), boxwex=0.6, notch=T, main=title, outline=FALSE, las=2, col=gs[ord])
+legend("topleft", orientation, fill=palette(), bty="n")
+```
+
+
+## Quantile normalization
+
+```{r}
+quantile_normalisation <- function(df){
+  df_rank <- apply(df,2,rank,ties.method="min")
+  df_sorted <- data.frame(apply(df, 2, sort))
+  df_mean <- apply(df_sorted, 1, mean)
+
+  index_to_mean <- function(my_index, my_mean){
+    return(my_mean[my_index])
+  }
+df_final <- apply(df_rank, 2, index_to_mean, my_mean=df_mean)
+  rownames(df_final) <- rownames(df)
+  return(df_final)
+}
+
+qnorm <- quantile_normalisation(raw.dat)
+```
+
+
+## Update ExpressionSet Object 
+
+### Boxplot of Qnorm
+
+```{r}
+exprs(my_set) <- qnorm
+
+## boxplot
+par(mar=c(7,4,2,1))
+title <- "GSE37614 Log2 Quantile Normalization"
+boxplot(log2(qnorm[,ord]), boxwex=0.6, notch=T, main=title, outline=FALSE, las=2, col=gs[ord])
+legend("topleft", orientation, fill=palette(), bty="n")
+```
+## Expression Distribution
+
+## Probe Filtering
+
+```{r}
+# Probe filtering
+medians <- rowMedians(ex)
+
+hist(log2(medians + 1), 150, col = "cornsilk1", freq = FALSE, 
+             main = "Histogram of the median intensities", 
+             border = "antiquewhite4", xlab = "Median intensities")
+```
+
+
+## Remove Multimapping probes
+
+```{r, message = F}
+probes <- rownames(my_set)
+```
+
+```{r}
+annotation <- AnnotationDbi::select(illuminaHumanv4.db,
+                                    keys = probes,
+                                    columns = c("SYMBOL", "GENENAME", "ENTREZID"),
+                                    keytype = "PROBEID")
+```
+
+```{r}
+## 'select()' returned 1:many mapping between keys and columns
+annotation <- subset(annotation, !is.na(ENTREZID))
+
+## resolve multi maps. 
+
+ann_grouped <- group_by(annotation, PROBEID)
+ann_sum <- dplyr::summarize(ann_grouped, no_of_matches = n_distinct(ENTREZID))
+ann_flt <- dplyr::filter(ann_sum, no_of_matches > 1)
+remove_id <- (probes %in% ann_flt$PROBEID)
+
+table(remove_id) # still too many probes
+```
+### Too many genes
+*manual filtering*
+
+```{r}
+annotations <- read.table("/home/clodagh/MASTERS PROJECT/GSE37614/A-GEOD-10558.adf.txt", header=T, sep="\t")
+mart <- biomaRt::useMart(biomart = "ensembl", dataset = "hsapiens_gene_ensembl")
+attr <- biomaRt::listAttributes(mart)
+genbank_map <- biomaRt::getBM(attributes = c("refseq_mrna", "hgnc_symbol", "gene_biotype"), mart = mart, useCache = FALSE)
+genbank_map <- genbank_map[!(is.na(genbank_map$refseq_mrna) | genbank_map$refseq_mrna==""),]
+genbank_map <- subset(genbank_map, genbank_map$gene_biotype == "protein_coding")
+
+# pop off the version ID
+annotations$genbank <- annotations$Reporter.Database.Entry..genbank.
+
+annotations$genbank <- gsub("\\.\\d+$", "", annotations$genbank)
+# merge
+master <- merge(genbank_map, annotations, by.x="refseq_mrna", by.y="genbank")
+```
+
+```{r}
+master_sub <- master[,c(4,2)]
+master_sub <- master_sub[!(is.na(master_sub$hgnc_symbol) | master_sub$hgnc_symbol==""),]
+
+# remove multi mapping probes
+master_sub <- master_sub %>% distinct(hgnc_symbol, .keep_all = T)
+dim(master_sub)
+
+```
+
+```{r}
+qnorm <- subset(qnorm, rownames(qnorm) %in% master_sub$Reporter.Name)
+dim(qnorm)
+```
+
+```{r}
+master_sub <- master_sub[match(rownames(qnorm), master_sub$Reporter.Name),]
+rownames(qnorm) <- master_sub$hgnc_symbol
+
+# qnorm now annotated with gene symbol instead of reporter name
+head(qnorm[1:3,1:3])
+```
+
+
+
+```{r}
+medians <- rowMedians(qnorm)
+
+hist(log2(medians + 1), 150, col = "cornsilk1", freq = FALSE, 
+             main = "Histogram of the median intensities", 
+             border = "antiquewhite4", xlab = "Median intensities")
+```
+# Cant have bimodal distribution
+```{r}
+medians <- log2(rowMedians(qnorm) + 1)
+qnorm <- as.data.frame(qnorm)
+qnorm$medians <- medians
+
+qnorm <- subset(qnorm, qnorm$medians > 7.9)
+qnorm <- as.matrix(qnorm[,1:(ncol(qnorm)-1)]) # get rid of last col (medians) 
+
+# plot again
+hist(log2(qnorm + 1), 150, col = "cornsilk1", freq = FALSE, 
+             main = "Histogram of the median intensities", 
+             border = "antiquewhite4", xlab = "Median intensities")
+dim(qnorm)
+#write.csv(qnorm, "/home/clodagh/MASTERS PROJECT/GSE37614/GSE37614_qnorm.csv", row.names = T)
+#qnorm <- read.csv("/home/clodagh/MASTERS PROJECT/GSE37614/GSE37614_qnorm.csv", row.names = 1)
+
+```
+# Exploratory Data Analysis
+## Sample heatmap
+
+```{r}
+meta <- my_set@phenoData@data
+meta <- meta[,c(4, 5)]
+colnames(meta) <- c("Batch", "Cancer_Subtype")
+phenotype_names <- as.factor(meta$Cancer_Subtype)
+batch <- meta$Batch
+annotation_for_heatmap <- 
+  data.frame(subtype = phenotype_names,  Batch= batch)
+row.names(annotation_for_heatmap) <- rownames(meta)
+```
+
+
+
+```{r}
+dists <- as.matrix(dist(t(qnorm), method = "manhattan"))
+
+rownames(dists) <- rownames(meta)
+hmcol <- colorRampPalette(RColorBrewer::brewer.pal(9, "YlOrRd"))(255)
+colnames(dists) <- NULL
+diag(dists) <- NA
+
+ann_colors <- list(
+  subtype= c("TNBC" = "chartreuse4", "Her2+" = "burlywood3", "ER+" = "purple"),
+  Batch = c(b1= "blue4", b2 = "cadetblue2")
+                   )
+pheatmap(dists, col = hmcol, cluster_rows= T,
+         annotation_row = annotation_for_heatmap,
+         annotation_colors = ann_colors,
+         legend = TRUE, 
+         treeheight_row = 0,
+         legend_breaks = c(min(dists, na.rm = TRUE), 
+                         max(dists, na.rm = TRUE)), 
+         legend_labels = (c("small distance", "large distance")),
+         main = "Clustering heatmap for the calibrated samples")
+```
+
+```{r}
+qnorm <- qnorm[,-23]
+meta <- my_set@phenoData@data
+meta <- meta[-23,] #remove outlier
+meta <- meta[,c(4, 5)]
+colnames(meta) <- c("Batch", "Cancer_Subtype")
+#write.table(meta, "metadata.csv", row.names=T, sep="\t")
+#write.csv(qnorm, "/home/clodagh/MASTERS PROJECT/GSE37614/GSE37614_qnorm.csv", row.names=T)
+```
+
+-----------------------------------------------------------------------
+#### BEGIN HERE #############
+```{r}
+qnorm <- read.csv("/home/clodagh/MASTERS PROJECT/GSE37614/GSE37614_qnorm.csv", row.names=1)
+meta <-  read.csv("/home/clodagh/MASTERS PROJECT/GSE37614/metadata.csv", sep = "\t")
+```
+
+
+# Exploratory Data Analysis
+## Sample heatmap
+
+```{r}
+phenotype_names <- meta$Cancer_Subtype
+batch <- meta$Batch
+annotation_for_heatmap <- 
+  data.frame(subtype = phenotype_names,  Batch= batch)
+row.names(annotation_for_heatmap) <- rownames(meta)
+```
+
+
+
+```{r}
+dists <- as.matrix(dist(t(qnorm), method = "manhattan"))
+
+rownames(dists) <- rownames(meta)
+hmcol <- colorRampPalette(RColorBrewer::brewer.pal(9, "YlOrRd"))(255)
+colnames(dists) <- NULL
+diag(dists) <- NA
+
+ann_colors <- list(
+  subtype= c("TNBC" = "chartreuse4", "Her2+" = "burlywood3", "ER+" = "purple"),
+  Batch = c(b1= "blue4", b2 = "cadetblue2")
+                   )
+pheatmap(dists, col = (hmcol), cluster_rows= T,
+         annotation_row = annotation_for_heatmap,
+         annotation_colors = ann_colors,
+         legend = TRUE, 
+         treeheight_row = 0,
+         legend_breaks = c(min(dists, na.rm = TRUE), 
+                         max(dists, na.rm = TRUE)), 
+         legend_labels = (c("small distance", "large distance")),
+         main = "Clustering heatmap for the calibrated samples")
+```
+
+
+
+### PCA Cancer Subtypes
+*2 groups - largely driven by batch*
+
+```{r}
+PCA <- prcomp(t(log2(qnorm)), scale = TRUE)
+percentVar <- round(100*PCA$sdev^2/sum(PCA$sdev^2),1)
+sd_ratio <- sqrt(percentVar[2] / percentVar[1])
+
+dataGG <- data.frame(PC1 = PCA$x[,1], PC2 = PCA$x[,2],
+                    Subtype = meta$Cancer_Subtype,
+                    Batch = meta$Batch)
+
+
+ggscatter(dataGG, x="PC1", y="PC2",
+                  color = "Subtype", palette = c("dodgerblue4", "darkorange2", "chartreuse", "purple"),
+                  title = "PCA plot log-transformed quantile normalized expression data",
+                  subtitle = "Cancer Subtypes",
+                  xlab = paste0("PC1, VarExp: ", percentVar[1], "%"),
+                  ylab = paste0("PC2, VarExp: ", percentVar[2], "%"),
+                  ellipse = FALSE, star.plot = F,
+                  ggtheme = theme_bw()) + 
+                  theme(legend.position = "right") + 
+                  theme(plot.title = element_text(hjust = 0.5, face = "bold"))
+```
+
+### PCA Batch Effects
+```{r}
+dataGG <- data.frame(PC1 = PCA$x[,1], PC2 = PCA$x[,2],
+                    Batch = meta$Batch)
+
+
+ggscatter(dataGG, x="PC1", y="PC2",
+                  color = "Batch", palette = c("dodgerblue4", "darkorange2", "chartreuse", "purple"),
+                  title = "PCA plot log-transformed quantile normalized expression data",
+                  subtitle = "Batch Effects (Batch 1, Batch 2)",
+                  xlab = paste0("PC1, VarExp: ", percentVar[1], "%"),
+                  ylab = paste0("PC2, VarExp: ", percentVar[2], "%"),
+                  ellipse = TRUE, star.plot = TRUE,
+                  ggtheme = theme_bw()) + 
+                  theme(legend.position = "right") + 
+                  theme(plot.title = element_text(hjust = 0.5, face = "bold"))
+```
+
+
+## Pearsons Correlation btween PCs and batch and cancer
+
+```{r}
+pca <- PCAtools::pca(log2(qnorm + 1), metadata = meta)
+
+PCAtools::eigencorplot(pca, components = PCAtools::getComponents(pca, 1:10),
+    metavars = c('Batch','Cancer_Subtype'),
+    col = c('white', 'cornsilk1', 'gold', 'forestgreen', 'darkgreen'),
+    cexCorval = 1.2, fontCorval = 2, posLab = 'all', rotLabX = 45,
+    scale = TRUE,
+    main = bquote(PC ~ Pearson ~ r^2 ~ clinical ~ correlates),
+    plotRsquared = TRUE,
+    corFUN = 'pearson',
+    corUSE = 'pairwise.complete.obs',
+    corMultipleTestCorrection = 'BH',
+    signifSymbols = c('****', '***', '**', '*', ''),
+    signifCutpoints = c(0, 0.0001, 0.001, 0.01, 0.05, 1))
+```
+
+
+## Remove Batch
+
+```{r}
+groups <- as.factor(meta$Cancer_Subtype)
+batch <- as.factor(meta$Batch)
+design <- model.matrix(~0 + groups + batch)
+gps <- c("ER", "HER", "TNBC", "b2")
+colnames(design) <- gps
+rm_batch <- limma::removeBatchEffect(log2(qnorm + 1), batch = meta$Batch, design=design)
+
+#write.table(rm_batch, file = '/home/clodagh/MASTERS PROJECT/GSE37614/GSE37614_rm_batch.txt', sep ='\t', col.names = T, row.names = T)
+
+```
+
+
+## PCA Cancer Subtype (Corrected)
+
+```{r}
+PCA <- prcomp(t(log2(qnorm)), scale = TRUE)
+percentVar <- round(100*PCA$sdev^2/sum(PCA$sdev^2),1)
+sd_ratio <- sqrt(percentVar[2] / percentVar[1])
+
+dataGG <- data.frame(PC1 = PCA$x[,1], PC2 = PCA$x[,2],
+                    Subtype = meta$Cancer_Subtype)
+
+
+ggscatter(dataGG, x="PC1", y="PC2",
+                  color = "Subtype", palette = c("dodgerblue4", "darkorange2", "chartreuse", "purple"),
+                  title = "PCA plot log-transformed batch corrected data",
+                  subtitle = "Cancer Subtypes",
+                  xlab = paste0("PC1, VarExp: ", percentVar[1], "%"),
+                  ylab = paste0("PC2, VarExp: ", percentVar[2], "%"),
+                  ellipse = F, star.plot = T, 
+                  ggtheme = theme_bw()) + 
+                  theme(legend.position = "right") + 
+                  theme(plot.title = element_text(hjust = 0.5, face = "bold"))
+```
+
+## PCA Batch Effect (Corrected)
+
+```{r}
+dataGG <- data.frame(PC1 = PCA$x[,1], PC2 = PCA$x[,2],
+                    Batch = meta$Batch)
+
+
+ggscatter(dataGG, x="PC1", y="PC2",
+                  color = "Batch", palette = c("dodgerblue4", "darkorange2", "chartreuse", "purple"),
+                  title = "PCA plot log-transformed batch corrected data",
+                  subtitle = "Batch Effects: Batch1, Batch2",
+                  xlab = paste0("PC1, VarExp: ", percentVar[1], "%"),
+                  ylab = paste0("PC2, VarExp: ", percentVar[2], "%"),
+                  ellipse = T, star.plot = T, 
+                  ggtheme = theme_bw()) + 
+                  theme(legend.position = "right") + 
+                  theme(plot.title = element_text(hjust = 0.5, face = "bold"))
+```
+
+## Sample heatmap (batch correcetd)
+
+
+```{r}
+dists <- as.matrix(dist(t(log2(qnorm)), method = "manhattan"))
+
+rownames(dists) <- rownames(meta)
+hmcol <- colorRampPalette(RColorBrewer::brewer.pal(9, "YlOrRd"))(255)
+colnames(dists) <- NULL
+diag(dists) <- NA
+
+ann_colors <- list(
+  subtype= c("TNBC" = "chartreuse4", "Her2+" = "burlywood3", "ER+" = "purple"),
+  Batch = c(b1= "blue4", b2 = "cadetblue2"))
+
+# Remove outlier? 
+pheatmap(dists, col = (hmcol),
+         annotation_row = annotation_for_heatmap,
+         annotation_colors = ann_colors,
+         legend = TRUE,
+         treeheight_row = 0,
+         legend_breaks = c(min(dists, na.rm = TRUE), 
+                         max(dists, na.rm = TRUE)), 
+         legend_labels = (c("small distance", "large distance")),
+         main = "GSE37614 Clustering heatmap normalized samples")
+```
+
